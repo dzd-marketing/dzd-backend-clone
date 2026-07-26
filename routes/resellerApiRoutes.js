@@ -7,7 +7,7 @@ const resellerApiController = require('../controllers/resellerApiController');
 router.get('/', resellerApiController.handleRequest);
 
 // ─── OLD ROUTES (keep for backward compatibility) ────────────────────────
-router.get('/services', resellerApiController.getServices);
+// router.get('/services', resellerApiController.getServices);
 router.get('/add', resellerApiController.addOrder);
 router.get('/status', resellerApiController.orderStatus);
 router.get('/refill', resellerApiController.createRefill);
