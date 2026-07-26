@@ -398,3 +398,10 @@ const createRefillHandler = async (req, res, reseller) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+
+// ─── Export Legacy Routes ──────────────────────────────────────────────────
+exports.getBalance = getBalanceHandler;
+exports.getServices = getServicesHandler;
+exports.addOrder = addOrderHandler;
+exports.orderStatus = orderStatusHandler;
+exports.createRefill = createRefillHandler;
