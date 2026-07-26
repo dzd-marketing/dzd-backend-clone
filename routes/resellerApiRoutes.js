@@ -4,7 +4,7 @@ const resellerApiController = require('../controllers/resellerApiController');
 
 // ─── MAIN ENTRY POINT ──────────────────────────────────────────────────────
 // All API calls go through this single endpoint: /api/v2?key=xxx&action=xxx
-router.get('/', resellerApiController.handleRequest);
+// router.get('/', resellerApiController.handleRequest);
 
 // ─── OLD ROUTES (keep for backward compatibility) ────────────────────────
 router.get('/services', resellerApiController.getServices);
