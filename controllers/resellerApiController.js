@@ -101,9 +101,8 @@ const getServiceDetails = async (serviceId) => {
 // ─── MAIN ENTRY POINT - All API calls go through this ─────────────────────
 exports.handleRequest = async (req, res) => {
   try {
-const data = req.method === "POST" ? req.body : req.query;
-
-const { key, action } = data;
+    const data = req.method === "POST" ? req.body : req.query;
+    const { key, action } = data;
     
     // Validate API key
     const reseller = await validateApiKey(key);
@@ -168,27 +167,26 @@ const getServicesHandler = async (req, res) => {
 // ─── ADD ORDER Handler ────────────────────────────────────────────────────
 const addOrderHandler = async (req, res, reseller) => {
   try {
-   const data = req.method === "POST" ? req.body : req.query;
-
-const {
-    service,
-    link,
-    quantity,
-    runs,
-    interval,
-    comments,
-    usernames,
-    hashtag,
-    username,
-    answer_number,
-    groups,
-    min,
-    max,
-    posts,
-    old_posts,
-    delay,
-    expiry
-} = data;
+    const data = req.method === "POST" ? req.body : req.query;
+    const {
+      service,
+      link,
+      quantity,
+      runs,
+      interval,
+      comments,
+      usernames,
+      hashtag,
+      username,
+      answer_number,
+      groups,
+      min,
+      max,
+      posts,
+      old_posts,
+      delay,
+      expiry
+    } = data;
     
     if (!service || !link) {
       return res.status(400).json({ error: 'Service ID and link are required' });
@@ -244,14 +242,15 @@ const {
       body: JSON.stringify({ provider: 'premium', ...params })
     });
     
-    const data = await proxyResponse.json();
+    // ✅ FIXED: Use different variable name (proxyData instead of data)
+    const proxyData = await proxyResponse.json();
     
-    if (data && data.order) {
+    if (proxyData && proxyData.order) {
       // Deduct balance from Cloudflare
       const deducted = await deductResellerBalance(
         reseller.uid, 
         websiteCharge, 
-        `Order #${data.order} - ${serviceDetails.name}`
+        `Order #${proxyData.order} - ${serviceDetails.name}`
       );
       
       if (!deducted) {
@@ -262,12 +261,12 @@ const {
       await db.query(
         `INSERT INTO orders (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, link, status, remains, currency, is_api_order) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, 'LKR', ?)`,
-        [data.order, reseller.uid, service, serviceDetails.name, 'premium', qty, websiteCharge, 0, link, qty, 1]
+        [proxyData.order, reseller.uid, service, serviceDetails.name, 'premium', qty, websiteCharge, 0, link, qty, 1]
       );
       
-      res.json({ order: data.order });
+      res.json({ order: proxyData.order });
     } else {
-      res.status(400).json(data);
+      res.status(400).json(proxyData);
     }
   } catch (error) {
     console.error('Add order error:', error);
@@ -278,9 +277,8 @@ const {
 // ─── ORDER STATUS Handler ─────────────────────────────────────────────────
 const orderStatusHandler = async (req, res, reseller) => {
   try {
-const data = req.method === "POST" ? req.body : req.query;
-
-const { order, orders } = data;
+    const data = req.method === "POST" ? req.body : req.query;
+    const { order, orders } = data;
     
     // Handle single order
     if (order) {
@@ -348,9 +346,8 @@ const { order, orders } = data;
 // ─── REFILL Handler ────────────────────────────────────────────────────────
 const createRefillHandler = async (req, res, reseller) => {
   try {
-const data = req.method === "POST" ? req.body : req.query;
-
-const { order, orders } = data;
+    const data = req.method === "POST" ? req.body : req.query;
+    const { order, orders } = data;
     
     // Handle single order
     if (order) {
@@ -375,8 +372,8 @@ const { order, orders } = data;
         body: JSON.stringify({ provider: 'premium', ...params })
       });
       
-      const data = await proxyResponse.json();
-      return res.json(data);
+      const proxyData = await proxyResponse.json();
+      return res.json(proxyData);
     }
     
     // Handle multiple orders
@@ -411,8 +408,8 @@ const { order, orders } = data;
           body: JSON.stringify({ provider: 'premium', ...params })
         });
         
-        const data = await proxyResponse.json();
-        results.push({ order: orderId, ...data });
+        const proxyData = await proxyResponse.json();
+        results.push({ order: orderId, ...proxyData });
       }
       
       return res.json(results);
