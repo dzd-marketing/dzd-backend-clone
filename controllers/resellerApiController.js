@@ -101,7 +101,9 @@ const getServiceDetails = async (serviceId) => {
 // ─── MAIN ENTRY POINT - All API calls go through this ─────────────────────
 exports.handleRequest = async (req, res) => {
   try {
-    const { key, action } = req.query;
+const data = req.method === "POST" ? req.body : req.query;
+
+const { key, action } = data;
     
     // Validate API key
     const reseller = await validateApiKey(key);
@@ -166,7 +168,27 @@ const getServicesHandler = async (req, res) => {
 // ─── ADD ORDER Handler ────────────────────────────────────────────────────
 const addOrderHandler = async (req, res, reseller) => {
   try {
-    const { service, link, quantity, runs, interval, comments, usernames, hashtag, username, answer_number, groups, min, max, posts, old_posts, delay, expiry } = req.query;
+   const data = req.method === "POST" ? req.body : req.query;
+
+const {
+    service,
+    link,
+    quantity,
+    runs,
+    interval,
+    comments,
+    usernames,
+    hashtag,
+    username,
+    answer_number,
+    groups,
+    min,
+    max,
+    posts,
+    old_posts,
+    delay,
+    expiry
+} = data;
     
     if (!service || !link) {
       return res.status(400).json({ error: 'Service ID and link are required' });
@@ -256,7 +278,9 @@ const addOrderHandler = async (req, res, reseller) => {
 // ─── ORDER STATUS Handler ─────────────────────────────────────────────────
 const orderStatusHandler = async (req, res, reseller) => {
   try {
-    const { order, orders } = req.query;
+const data = req.method === "POST" ? req.body : req.query;
+
+const { order, orders } = data;
     
     // Handle single order
     if (order) {
@@ -324,7 +348,9 @@ const orderStatusHandler = async (req, res, reseller) => {
 // ─── REFILL Handler ────────────────────────────────────────────────────────
 const createRefillHandler = async (req, res, reseller) => {
   try {
-    const { order, orders } = req.query;
+const data = req.method === "POST" ? req.body : req.query;
+
+const { order, orders } = data;
     
     // Handle single order
     if (order) {
