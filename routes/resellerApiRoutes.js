@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const resellerApiController = require('../controllers/resellerApiController');
 
-router.get('/', resellerApiController.handleRequest);
+// router.get('/', resellerApiController.handleRequest);
 
 // ─── Mewa carima routes ────────────────────────
 router.get('/services', resellerApiController.getServices);
