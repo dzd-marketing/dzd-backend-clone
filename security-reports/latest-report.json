@@ -1,0 +1,84 @@
+{
+  "timestamp": "2026-07-26T00:00:00.016Z",
+  "server": {
+    "hostname": "vps3405873\n",
+    "ip": "2604:a00:101:7:216:3eff:fe33:f831",
+    "os": "Ubuntu 20.04.6 LTS\n"
+  },
+  "failedLogins": {
+    "count": 0,
+    "details": [],
+    "topIPs": [],
+    "status": "good"
+  },
+  "bruteForce": {
+    "detected": false,
+    "attacks": [],
+    "totalAttacks": 0,
+    "fail2banInstalled": true,
+    "fail2banActive": true,
+    "fail2banJails": [
+      "sshd"
+    ],
+    "blockedIPs": [
+      "138.197.146.45",
+      "91.92.47.140",
+      "101.32.240.31",
+      "137.184.140.153"
+    ],
+    "totalBanned": 4,
+    "status": "good"
+  },
+  "portScanning": {
+    "detected": false,
+    "scans": [],
+    "suspiciousIPs": [],
+    "status": "good"
+  },
+  "fileIntegrity": {
+    "changedFiles": [
+      {
+        "file": "/var/log/auth.log",
+        "oldHash": "3e138b336ca15459031154e5766de8be9e913b1115df08d373c37fdd5eb7b8c4",
+        "newHash": "87558e70976462c07f301d69c6e2c4e5a8b2031e82d662d4d61fcb4b50c6630a",
+        "modified": "2026-07-25T23:55:03.987Z"
+      }
+    ],
+    "newFiles": [],
+    "criticalChanges": [],
+    "status": "warning"
+  },
+  "systemResources": {
+    "cpu": 14.3,
+    "memory": 52.207,
+    "disk": 21,
+    "loadAverage": 0.75,
+    "uptime": "up 9 weeks, 5 hours, 14 minutes",
+    "status": "good"
+  },
+  "openPorts": {
+    "ports": [
+      "22",
+      "53",
+      "80",
+      "443",
+      "3000",
+      "3001",
+      "3306",
+      "33060"
+    ],
+    "count": 8,
+    "suspiciousPorts": [
+      "3000",
+      "3001",
+      "33060"
+    ],
+    "status": "warning"
+  },
+  "services": {
+    "runningServices": 3,
+    "suspicious": false,
+    "status": "good"
+  },
+  "securityScore": 85
+}

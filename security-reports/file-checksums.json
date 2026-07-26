@@ -1,0 +1,8 @@
+{
+  "/etc/passwd": "3737d2b80d384398194b4082b89f6fb580cec73cc3d479596b2a579be79c58f8",
+  "/etc/shadow": "2d3bed3910168d8357c9391272599e9c7af425853fe3e24cd64f42a60188e1d3",
+  "/etc/ssh/sshd_config": "7ee93ee1ca76a5a97fe1ff40c14f992b1fad5939948e110171cdb5a2e7f7c02f",
+  "/etc/hosts.allow": "9eadbcd7ec16f4e5961ad2035c0228de7c22b2ba0f6761df63b1b3d9bad9d0a7",
+  "/etc/hosts.deny": "1d0a326106184ef6c389d685e061ba7737de6f7f60c600ec66b19682c53c08d1",
+  "/var/log/auth.log": "87558e70976462c07f301d69c6e2c4e5a8b2031e82d662d4d61fcb4b50c6630a"
+}

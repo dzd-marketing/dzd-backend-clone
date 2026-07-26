@@ -1,0 +1,218 @@
+[
+  {
+    "timestamp": "2026-07-05T08:31:50.000Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 0
+  },
+  {
+    "timestamp": "2026-07-05T08:33:45.927Z",
+    "score": 75,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-05T08:43:15.502Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-05T08:46:07.545Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-05T08:50:19.582Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-05T10:25:22.127Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-06T00:00:00.017Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-07T00:00:00.016Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-08T00:00:00.011Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-09T00:00:00.010Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-10T00:00:00.044Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-11T00:00:00.013Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-12T00:00:00.012Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-13T00:00:00.010Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-14T00:00:00.014Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-15T00:00:00.013Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-16T00:00:00.019Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-17T00:00:00.015Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-18T00:00:00.019Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-19T00:00:00.013Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-20T00:00:00.010Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-21T00:00:00.015Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-22T00:00:00.014Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-23T00:00:00.012Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-24T00:00:00.011Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-25T00:00:00.015Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  },
+  {
+    "timestamp": "2026-07-26T00:00:00.016Z",
+    "score": 85,
+    "failedLogins": 0,
+    "bruteForce": 0,
+    "portScans": 0,
+    "fileChanges": 1
+  }
+]

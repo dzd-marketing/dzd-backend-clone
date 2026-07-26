@@ -1,0 +1,19 @@
+{
+  "running": false,
+  "status": "completed",
+  "startTime": "2026-07-26T09:50:13.786Z",
+  "currentPage": 1,
+  "totalPages": 1,
+  "servicesImported": 1028,
+  "servicesSkipped": 0,
+  "logs": [
+    {
+      "timestamp": "2026-07-26T09:50:45.488Z",
+      "message": "✅ Imported 1028 services from page 1",
+      "type": "info"
+    }
+  ],
+  "exchangeRate": 344.6,
+  "profitMargin": 0.9,
+  "lastUpdate": "2026-07-26T09:50:45.489Z"
+}
