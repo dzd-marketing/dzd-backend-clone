@@ -98,16 +98,58 @@ const getServiceDetails = async (serviceId) => {
   }
 };
 
-// ─── Get Services ──────────────────────────────────────────────────────────
-exports.getServices = async (req, res) => {
+// ─── MAIN ENTRY POINT - All API calls go through this ─────────────────────
+exports.handleRequest = async (req, res) => {
   try {
-    const { key } = req.query;
+    const { key, action } = req.query;
     
+    // Validate API key
     const reseller = await validateApiKey(key);
     if (!reseller) {
       return res.status(401).json({ error: 'Invalid or expired API key' });
     }
     
+    // Route based on action
+    switch (action) {
+      case 'balance':
+        return await getBalanceHandler(req, res, reseller);
+      case 'services':
+        return await getServicesHandler(req, res);
+      case 'add':
+        return await addOrderHandler(req, res, reseller);
+      case 'status':
+        return await orderStatusHandler(req, res, reseller);
+      case 'refill':
+        return await createRefillHandler(req, res, reseller);
+      default:
+        return res.status(400).json({ 
+          error: 'Invalid action',
+          available_actions: ['balance', 'services', 'add', 'status', 'refill']
+        });
+    }
+  } catch (error) {
+    console.error('API Handler error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// ─── BALANCE Handler ──────────────────────────────────────────────────────
+const getBalanceHandler = async (req, res, reseller) => {
+  try {
+    const balance = await getResellerBalance(reseller.uid);
+    res.json({
+      balance,
+      currency: 'LKR'
+    });
+  } catch (error) {
+    console.error('Get balance error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// ─── SERVICES Handler ─────────────────────────────────────────────────────
+const getServicesHandler = async (req, res) => {
+  try {
     const response = await fetch('https://smm-services-cache.sitewasd2026.workers.dev/api/premium-services');
     if (!response.ok) {
       return res.status(502).json({ error: 'Failed to fetch services' });
@@ -121,16 +163,10 @@ exports.getServices = async (req, res) => {
   }
 };
 
-// ─── Add Order ─────────────────────────────────────────────────────────────
-exports.addOrder = async (req, res) => {
+// ─── ADD ORDER Handler ────────────────────────────────────────────────────
+const addOrderHandler = async (req, res, reseller) => {
   try {
-    const { key, action, service, link, quantity, runs, interval, comments, usernames, hashtag, username, answer_number, groups, min, max, posts, old_posts, delay, expiry } = req.query;
-    
-    // Validate API key
-    const reseller = await validateApiKey(key);
-    if (!reseller) {
-      return res.status(401).json({ error: 'Invalid or expired API key' });
-    }
+    const { service, link, quantity, runs, interval, comments, usernames, hashtag, username, answer_number, groups, min, max, posts, old_posts, delay, expiry } = req.query;
     
     if (!service || !link) {
       return res.status(400).json({ error: 'Service ID and link are required' });
@@ -200,7 +236,7 @@ exports.addOrder = async (req, res) => {
         return res.status(500).json({ error: 'Failed to deduct balance' });
       }
       
-      // Save order to database with charge as website charge (LKR) and provider_charge as 0
+      // Save order to database
       await db.query(
         `INSERT INTO orders (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, link, status, remains, currency, is_api_order) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, 'LKR', ?)`,
@@ -217,22 +253,17 @@ exports.addOrder = async (req, res) => {
   }
 };
 
-// ─── Order Status ──────────────────────────────────────────────────────────
-exports.orderStatus = async (req, res) => {
+// ─── ORDER STATUS Handler ─────────────────────────────────────────────────
+const orderStatusHandler = async (req, res, reseller) => {
   try {
-    const { key, action, order, orders } = req.query;
-    
-    const reseller = await validateApiKey(key);
-    if (!reseller) {
-      return res.status(401).json({ error: 'Invalid or expired API key' });
-    }
+    const { order, orders } = req.query;
     
     // Handle single order
     if (order) {
       const [orderData] = await db.query(
         `SELECT charge, start_count, status, remains, currency 
-         FROM orders WHERE order_id = ?`,
-        [order]
+         FROM orders WHERE order_id = ? AND user_id = ?`,
+        [order, reseller.uid]
       );
       
       if (orderData.length === 0) {
@@ -261,8 +292,8 @@ exports.orderStatus = async (req, res) => {
       for (const orderId of orderIds) {
         const [orderData] = await db.query(
           `SELECT charge, start_count, status, remains, currency 
-           FROM orders WHERE order_id = ?`,
-          [orderId]
+           FROM orders WHERE order_id = ? AND user_id = ?`,
+          [orderId, reseller.uid]
         );
         
         if (orderData.length === 0) {
@@ -290,18 +321,23 @@ exports.orderStatus = async (req, res) => {
   }
 };
 
-// ─── Create Refill ─────────────────────────────────────────────────────────
-exports.createRefill = async (req, res) => {
+// ─── REFILL Handler ────────────────────────────────────────────────────────
+const createRefillHandler = async (req, res, reseller) => {
   try {
-    const { key, action, order, orders } = req.query;
-    
-    const reseller = await validateApiKey(key);
-    if (!reseller) {
-      return res.status(401).json({ error: 'Invalid or expired API key' });
-    }
+    const { order, orders } = req.query;
     
     // Handle single order
     if (order) {
+      // Verify order belongs to this reseller
+      const [orderCheck] = await db.query(
+        'SELECT order_id FROM orders WHERE order_id = ? AND user_id = ?',
+        [order, reseller.uid]
+      );
+      
+      if (orderCheck.length === 0) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      
       const params = {
         action: 'refill',
         order: order
@@ -327,6 +363,17 @@ exports.createRefill = async (req, res) => {
       const results = [];
       
       for (const orderId of orderIds) {
+        // Verify order belongs to this reseller
+        const [orderCheck] = await db.query(
+          'SELECT order_id FROM orders WHERE order_id = ? AND user_id = ?',
+          [orderId, reseller.uid]
+        );
+        
+        if (orderCheck.length === 0) {
+          results.push({ order: orderId, error: 'Order not found' });
+          continue;
+        }
+        
         const params = {
           action: 'refill',
           order: orderId
@@ -348,27 +395,6 @@ exports.createRefill = async (req, res) => {
     res.status(400).json({ error: 'Invalid request' });
   } catch (error) {
     console.error('Create refill error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-// ─── Get Reseller Balance ─────────────────────────────────────────────────
-exports.getBalance = async (req, res) => {
-  try {
-    const { key } = req.query;
-    
-    const reseller = await validateApiKey(key);
-    if (!reseller) {
-      return res.status(401).json({ error: 'Invalid or expired API key' });
-    }
-    
-    const balance = await getResellerBalance(reseller.uid);
-    res.json({
-      balance,
-      currency: 'LKR'
-    });
-  } catch (error) {
-    console.error('Get balance error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
