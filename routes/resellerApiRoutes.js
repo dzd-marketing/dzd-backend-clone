@@ -2,15 +2,38 @@ const express = require('express');
 const router = express.Router();
 const resellerApiController = require('../controllers/resellerApiController');
 
-// ─── MAIN ENTRY POINT ──────────────────────────────────────────────────────
-// All API calls go through this single endpoint: /api/v2?key=xxx&action=xxx
-router.get('/', resellerApiController.handleRequest);
+router
+  .route('/')
+  .get(resellerApiController.handleRequest)
+  .post(resellerApiController.handleRequest);
 
-// ─── OLD ROUTES (keep for backward compatibility) ────────────────────────
-router.get('/services', resellerApiController.getServices);
-router.get('/add', resellerApiController.addOrder);
-router.get('/status', resellerApiController.orderStatus);
-router.get('/refill', resellerApiController.createRefill);
-router.get('/balance', resellerApiController.getBalance);
+// ============================================================================
+// MEWA KARIMA API 
+// ============================================================================
+
+router
+  .route('/services')
+  .get(resellerApiController.getServices)
+  .post(resellerApiController.getServices);
+
+router
+  .route('/add')
+  .get(resellerApiController.addOrder)
+  .post(resellerApiController.addOrder);
+
+router
+  .route('/status')
+  .get(resellerApiController.orderStatus)
+  .post(resellerApiController.orderStatus);
+
+router
+  .route('/refill')
+  .get(resellerApiController.createRefill)
+  .post(resellerApiController.createRefill);
+
+router
+  .route('/balance')
+  .get(resellerApiController.getBalance)
+  .post(resellerApiController.getBalance);
 
 module.exports = router;
