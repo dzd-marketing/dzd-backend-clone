@@ -48,7 +48,7 @@ async function addOrderToQueue(orderData) {
 }
 
 // ================================================================
-// ===== CREATE ORDER - WITHOUT BALANCE CHECK =====
+// ===== CREATE ORDER - WITH BALANCE DEDUCT FOR QUEUED ORDERS =====
 // ================================================================
 exports.createOrder = async (req, res) => {
     try {
@@ -81,6 +81,36 @@ exports.createOrder = async (req, res) => {
 
         // Calculate provider charge (80% of customer charge)
         const providerCharge = parseFloat(charge) * 0.8;
+        const userCharge = parseFloat(charge);
+
+        // ===== DEDUCT USER BALANCE FIRST =====
+        const [userResult] = await db.query(
+            'SELECT balance FROM users WHERE id = ?',
+            [userId]
+        );
+
+        if (!userResult.length) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const currentBalance = parseFloat(userResult[0].balance) || 0;
+
+        if (currentBalance < userCharge) {
+            return res.status(400).json({ 
+                error: 'Insufficient balance',
+                currentBalance: currentBalance,
+                required: userCharge
+            });
+        }
+
+        // Deduct balance from user
+        const newBalance = currentBalance - userCharge;
+        await db.query(
+            'UPDATE users SET balance = ? WHERE id = ?',
+            [newBalance, userId]
+        );
+
+        console.log(`💰 User balance deducted: ${currentBalance} -> ${newBalance}`);
 
         // ===== TRY TO PROCESS ORDER DIRECTLY =====
         console.log(`📤 Processing order directly...`);
@@ -123,33 +153,40 @@ exports.createOrder = async (req, res) => {
                         service_name: serviceName,
                         link: link,
                         quantity: quantity,
-                        charge: charge,
+                        charge: userCharge,
                         provider_charge: providerCharge,
                         provider: provider || 'premium',
                         currency: currency || 'LKR'
                     });
 
-                    // Insert into orders table with 'queued' status
                     await db.query(
                         `INSERT INTO orders 
                          (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, currency, link, start_count, remains, status, is_api_order, is_queued) 
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                        [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, charge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
+                        [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, userCharge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
                     );
 
                     return res.status(201).json({
                         success: true,
-                        message: 'Order queued due to insufficient provider funds',
+                        message: 'Order queued due to insufficient provider funds. Balance deducted.',
                         orderId: orderId,
-                        status: 'queued'
+                        status: 'queued',
+                        balanceAfter: newBalance
                     });
                 }
 
-                // Other errors - return error
+                // Other errors - refund the user
                 console.error(`❌ Provider API error:`, proxyData.error);
+                
+                await db.query(
+                    'UPDATE users SET balance = ? WHERE id = ?',
+                    [currentBalance, userId]
+                );
+                
                 return res.status(400).json({
                     error: proxyData.error,
-                    details: proxyData
+                    details: proxyData,
+                    refunded: true
                 });
             }
 
@@ -161,7 +198,7 @@ exports.createOrder = async (req, res) => {
                     `INSERT INTO orders 
                      (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, currency, link, start_count, remains, status, is_api_order, provider_order_id) 
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, charge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Processing', 1, providerOrderId]
+                    [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, userCharge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Processing', 1, providerOrderId]
                 );
 
                 return res.status(201).json({
@@ -169,21 +206,29 @@ exports.createOrder = async (req, res) => {
                     message: 'Order created and processing',
                     orderId: orderId,
                     providerOrderId: providerOrderId,
-                    status: 'processing'
+                    status: 'processing',
+                    balanceAfter: newBalance
                 });
             }
 
-            // If we get here, something unexpected happened
+            // Unexpected response - refund the user
             console.error(`❌ Unexpected API response:`, proxyData);
+            
+            await db.query(
+                'UPDATE users SET balance = ? WHERE id = ?',
+                [currentBalance, userId]
+            );
+            
             return res.status(400).json({
                 error: 'Unexpected API response',
-                details: proxyData
+                details: proxyData,
+                refunded: true
             });
 
         } catch (apiError) {
             console.error(`❌ Provider API call failed:`, apiError.message);
             
-            // If API call fails, queue the order
+            // If API call fails, queue the order (balance already deducted)
             await addOrderToQueue({
                 order_id: orderId,
                 user_id: userId,
@@ -191,7 +236,7 @@ exports.createOrder = async (req, res) => {
                 service_name: serviceName,
                 link: link,
                 quantity: quantity,
-                charge: charge,
+                charge: userCharge,
                 provider_charge: providerCharge,
                 provider: provider || 'premium',
                 currency: currency || 'LKR'
@@ -201,14 +246,15 @@ exports.createOrder = async (req, res) => {
                 `INSERT INTO orders 
                  (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, currency, link, start_count, remains, status, is_api_order, is_queued) 
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, charge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
+                [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, userCharge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
             );
 
             return res.status(201).json({
                 success: true,
-                message: 'Order queued due to API error. Will be processed when provider is available.',
+                message: 'Order queued due to API error. Balance deducted.',
                 orderId: orderId,
-                status: 'queued'
+                status: 'queued',
+                balanceAfter: newBalance
             });
         }
 
@@ -225,7 +271,6 @@ exports.processQueuedOrders = async (req, res) => {
     try {
         console.log(`🔄 Processing queued orders...`);
 
-        // Get all pending queued orders
         const [queuedOrders] = await db.query(
             `SELECT * FROM order_queue WHERE status = 'pending' ORDER BY created_at ASC`
         );
@@ -266,7 +311,6 @@ exports.processQueuedOrders = async (req, res) => {
                 const proxyData = await proxyResponse.json();
                 console.log(`📥 Response for ${order.order_id}:`, proxyData);
 
-                // ===== CHECK FOR NOT ENOUGH FUNDS ERROR =====
                 if (proxyData.error) {
                     const errorMsg = proxyData.error.toLowerCase();
                     
@@ -277,7 +321,6 @@ exports.processQueuedOrders = async (req, res) => {
                         
                         console.log(`⏳ Order ${order.order_id} still has insufficient funds. Keeping in queue.`);
                         
-                        // Update queue with error but keep as pending
                         await db.query(
                             `UPDATE order_queue 
                              SET error_message = ?, last_attempt = NOW(), attempt_count = attempt_count + 1 
@@ -291,7 +334,6 @@ exports.processQueuedOrders = async (req, res) => {
                             error: proxyData.error
                         });
                         
-                        // Stop processing - if one fails with funds error, the rest will too
                         break;
                     }
 
@@ -299,6 +341,11 @@ exports.processQueuedOrders = async (req, res) => {
                     await db.query(
                         `UPDATE order_queue SET status = 'failed', error_message = ?, processed_at = NOW() WHERE order_id = ?`,
                         [proxyData.error, order.order_id]
+                    );
+
+                    await db.query(
+                        `UPDATE orders SET status = 'Failed', updated_at = NOW() WHERE order_id = ?`,
+                        [order.order_id]
                     );
 
                     failed++;
@@ -312,9 +359,7 @@ exports.processQueuedOrders = async (req, res) => {
                     continue;
                 }
 
-                // ===== ORDER SUCCESSFUL =====
                 if (proxyData && proxyData.order) {
-                    // Update order in orders table
                     await db.query(
                         `UPDATE orders 
                          SET status = 'Processing', 
@@ -325,7 +370,6 @@ exports.processQueuedOrders = async (req, res) => {
                         [proxyData.order, order.order_id]
                     );
 
-                    // Update queue status
                     await db.query(
                         `UPDATE order_queue SET status = 'processed', processed_at = NOW() WHERE order_id = ?`,
                         [order.order_id]
@@ -340,10 +384,14 @@ exports.processQueuedOrders = async (req, res) => {
 
                     console.log(`✅ Order ${order.order_id} processed successfully`);
                 } else {
-                    // Unexpected response
                     await db.query(
                         `UPDATE order_queue SET status = 'failed', error_message = ?, processed_at = NOW() WHERE order_id = ?`,
                         ['Unexpected API response', order.order_id]
+                    );
+
+                    await db.query(
+                        `UPDATE orders SET status = 'Failed', updated_at = NOW() WHERE order_id = ?`,
+                        [order.order_id]
                     );
 
                     failed++;
@@ -360,6 +408,11 @@ exports.processQueuedOrders = async (req, res) => {
                 await db.query(
                     `UPDATE order_queue SET status = 'failed', error_message = ?, processed_at = NOW() WHERE order_id = ?`,
                     [error.message, order.order_id]
+                );
+
+                await db.query(
+                    `UPDATE orders SET status = 'Failed', updated_at = NOW() WHERE order_id = ?`,
+                    [order.order_id]
                 );
 
                 failed++;
@@ -425,6 +478,12 @@ exports.retryQueuedOrder = async (req, res) => {
             });
         }
 
+        // Also reset order status in orders table
+        await db.query(
+            `UPDATE orders SET status = 'Queued', updated_at = NOW() WHERE order_id = ? AND status = 'Failed'`,
+            [orderId]
+        );
+
         res.json({
             success: true,
             message: `Order ${orderId} reset to pending for retry`
@@ -437,10 +496,8 @@ exports.retryQueuedOrder = async (req, res) => {
 };
 
 // ================================================================
-// ===== REST OF YOUR EXISTING FUNCTIONS =====
+// ===== GET USER ORDERS =====
 // ================================================================
-
-// Get all orders for a user
 exports.getUserOrders = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -457,6 +514,9 @@ exports.getUserOrders = async (req, res) => {
     }
 };
 
+// ================================================================
+// ===== GET ORDER BY ID =====
+// ================================================================
 exports.getOrderById = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -477,7 +537,9 @@ exports.getOrderById = async (req, res) => {
     }
 };
 
-// Update order status
+// ================================================================
+// ===== UPDATE ORDER STATUS =====
+// ================================================================
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { orderId } = req.params;
@@ -526,7 +588,9 @@ exports.updateOrderStatus = async (req, res) => {
     }
 };
 
-// Get order statistics
+// ================================================================
+// ===== GET ORDER STATS =====
+// ================================================================
 exports.getOrderStats = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -536,19 +600,22 @@ exports.getOrderStats = async (req, res) => {
                 COUNT(*) as total,
                 SUM(CASE WHEN LOWER(status) LIKE '%completed%' OR LOWER(status) LIKE '%success%' THEN 1 ELSE 0 END) as completed,
                 SUM(CASE WHEN LOWER(status) LIKE '%pending%' OR LOWER(status) LIKE '%processing%' OR LOWER(status) LIKE '%progress%' THEN 1 ELSE 0 END) as active,
+                SUM(CASE WHEN LOWER(status) LIKE '%queued%' THEN 1 ELSE 0 END) as queued,
                 SUM(charge) as total_spent
              FROM orders WHERE user_id = ?`,
             [userId]
         );
 
-        res.json(stats[0] || { total: 0, completed: 0, active: 0, total_spent: 0 });
+        res.json(stats[0] || { total: 0, completed: 0, active: 0, queued: 0, total_spent: 0 });
     } catch (error) {
         console.error('Error fetching order stats:', error);
         res.status(500).json({ error: 'Failed to fetch order stats' });
     }
 };
 
-// Get recent orders (limit 5)
+// ================================================================
+// ===== GET RECENT ORDERS =====
+// ================================================================
 exports.getRecentOrders = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -565,7 +632,9 @@ exports.getRecentOrders = async (req, res) => {
     }
 };
 
-// Get all orders with refund info for a user
+// ================================================================
+// ===== GET USER ORDERS WITH REFUNDS =====
+// ================================================================
 exports.getUserOrdersWithRefunds = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -595,7 +664,9 @@ exports.getUserOrdersWithRefunds = async (req, res) => {
     }
 };
 
-// Get total refunded amount for a user
+// ================================================================
+// ===== GET USER TOTAL REFUNDED =====
+// ================================================================
 exports.getUserTotalRefunded = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -620,6 +691,9 @@ exports.getUserTotalRefunded = async (req, res) => {
     }
 };
 
+// ================================================================
+// ===== GET API ORDERS =====
+// ================================================================
 exports.getApiOrders = async (req, res) => {
     try {
         const { status, limit = 100, offset = 0 } = req.query;
@@ -657,7 +731,9 @@ exports.getApiOrders = async (req, res) => {
     }
 };
 
-// Get API order statistics
+// ================================================================
+// ===== GET API ORDER STATS =====
+// ================================================================
 exports.getApiOrderStats = async (req, res) => {
     try {
         const [stats] = await db.query(
@@ -666,6 +742,7 @@ exports.getApiOrderStats = async (req, res) => {
                 SUM(charge) as total_charge,
                 SUM(CASE WHEN status LIKE '%completed%' OR status LIKE '%success%' THEN 1 ELSE 0 END) as completed_orders,
                 SUM(CASE WHEN status LIKE '%pending%' OR status LIKE '%processing%' OR status LIKE '%progress%' THEN 1 ELSE 0 END) as active_orders,
+                SUM(CASE WHEN status LIKE '%queued%' THEN 1 ELSE 0 END) as queued_orders,
                 SUM(CASE WHEN refunded_amount > 0 THEN 1 ELSE 0 END) as refunded_orders,
                 SUM(refunded_amount) as total_refunded
             FROM orders WHERE is_api_order = 1`
@@ -678,6 +755,7 @@ exports.getApiOrderStats = async (req, res) => {
                 total_charge: 0,
                 completed_orders: 0,
                 active_orders: 0,
+                queued_orders: 0,
                 refunded_orders: 0,
                 total_refunded: 0
             }
