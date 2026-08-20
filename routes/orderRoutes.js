@@ -24,9 +24,8 @@ router.post('/refunds/process', refundController.processRefund);
 
 //queue routes 
 router.post('/create-queue-order', orderController.createQueueOrder);
-router.delete('/delete-order/:orderId', orderController.deleteOrder);
+router.delete('/delete-queue-order/:orderId', orderController.deleteQueueOrder);
 router.get('/queue-orders', orderController.getQueueOrders);
-router.post('/process-queue-order', orderController.processQueueOrder);
 router.post('/send-queue-order/:orderId', orderController.sendQueueOrderToApi);
 
 router.get('/admin/orders', async (req, res) => {
