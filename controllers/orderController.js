@@ -1,48 +1,7 @@
 const db = require('../config/db');
 
 // ================================================================
-// ===== GET PROVIDER BALANCE - FIXED =====
-// ================================================================
-async function getProviderBalanceFromAPI() {
-    try {
-        const response = await fetch('https://api.dzd-marketing.site/api/v2/balance?key=13bc74956904c166');
-        
-        if (!response.ok) {
-            console.error(`❌ API Error: ${response.status} - ${response.statusText}`);
-            return 0;
-        }
-        
-        const data = await response.json();
-        console.log(`💰 Provider balance response:`, data);
-        
-        // Try different possible response formats
-        let balance = 0;
-        if (data.balance !== undefined) {
-            balance = parseFloat(data.balance);
-        } else if (data.data && data.data.balance !== undefined) {
-            balance = parseFloat(data.data.balance);
-        } else if (data.result && data.result.balance !== undefined) {
-            balance = parseFloat(data.result.balance);
-        } else if (typeof data === 'number') {
-            balance = data;
-        } else if (data.success && data.balance !== undefined) {
-            balance = parseFloat(data.balance);
-        }
-        
-        // Ensure balance is a valid number
-        balance = isNaN(balance) ? 0 : balance;
-        
-        console.log(`✅ Provider balance: LKR ${balance}`);
-        return balance;
-        
-    } catch (error) {
-        console.error('❌ Error fetching provider balance:', error.message);
-        return 0;
-    }
-}
-
-// ================================================================
-// ===== ADD ORDER TO QUEUE - FIXED =====
+// ===== ADD ORDER TO QUEUE =====
 // ================================================================
 async function addOrderToQueue(orderData) {
     try {
@@ -72,7 +31,7 @@ async function addOrderToQueue(orderData) {
             return { success: false, message: 'Order already in queue' };
         }
 
-        const insertResult = await db.query(
+        await db.query(
             `INSERT INTO order_queue 
              (order_id, user_id, service_id, service_name, link, quantity, charge, provider_charge, provider, currency, status, created_at) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())`,
@@ -80,7 +39,7 @@ async function addOrderToQueue(orderData) {
         );
 
         console.log(`✅ Order ${order_id} added to queue successfully`);
-        return { success: true, insertId: insertResult[0]?.insertId };
+        return { success: true };
 
     } catch (error) {
         console.error('❌ Error adding order to queue:', error);
@@ -89,7 +48,7 @@ async function addOrderToQueue(orderData) {
 }
 
 // ================================================================
-// ===== CREATE ORDER - FIXED =====
+// ===== CREATE ORDER - WITHOUT BALANCE CHECK =====
 // ================================================================
 exports.createOrder = async (req, res) => {
     try {
@@ -122,55 +81,9 @@ exports.createOrder = async (req, res) => {
 
         // Calculate provider charge (80% of customer charge)
         const providerCharge = parseFloat(charge) * 0.8;
-        
-        // Get provider balance
-        let providerBalance = await getProviderBalanceFromAPI();
-        
-        console.log(`💰 Provider balance: LKR ${providerBalance}`);
-        console.log(`📦 Order charge: LKR ${charge}, Provider cost: LKR ${providerCharge}`);
 
-        // ===== CHECK IF WE SHOULD PROCESS DIRECTLY OR QUEUE =====
-        // If balance is 0 or we couldn't fetch it, queue the order
-        const shouldQueue = (providerBalance === 0) || (providerBalance < providerCharge);
-        
-        // Also queue if balance is insufficient (less than provider charge + buffer)
-        const MIN_BALANCE_BUFFER = 50; // LKR 50 buffer
-        const isInsufficient = providerBalance < (providerCharge + MIN_BALANCE_BUFFER);
-
-        if (shouldQueue || isInsufficient) {
-            console.log(`⚠️ Provider balance insufficient (${providerBalance} < ${providerCharge + MIN_BALANCE_BUFFER}). Adding to queue...`);
-
-            await addOrderToQueue({
-                order_id: orderId,
-                user_id: userId,
-                service_id: serviceId,
-                service_name: serviceName,
-                link: link,
-                quantity: quantity,
-                charge: charge,
-                provider_charge: providerCharge,
-                provider: provider || 'premium',
-                currency: currency || 'LKR'
-            });
-
-            // Still insert into orders table with 'queued' status
-            await db.query(
-                `INSERT INTO orders 
-                 (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, currency, link, start_count, remains, status, is_api_order, is_queued) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, charge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
-            );
-
-            return res.status(201).json({
-                success: true,
-                message: 'Order queued for processing. Will be processed when provider balance is available.',
-                orderId: orderId,
-                status: 'queued'
-            });
-        }
-
-        // ===== PROCESS ORDER DIRECTLY =====
-        console.log(`✅ Provider has sufficient balance. Processing order directly...`);
+        // ===== TRY TO PROCESS ORDER DIRECTLY =====
+        console.log(`📤 Processing order directly...`);
 
         try {
             const params = {
@@ -191,7 +104,56 @@ exports.createOrder = async (req, res) => {
             const proxyData = await proxyResponse.json();
             console.log(`📥 Provider API response:`, proxyData);
 
-            // Check if order was successful
+            // ===== CHECK FOR NOT ENOUGH FUNDS ERROR =====
+            if (proxyData.error) {
+                const errorMsg = proxyData.error.toLowerCase();
+                
+                // If error is about insufficient funds, queue the order
+                if (errorMsg.includes('not enough funds') || 
+                    errorMsg.includes('insufficient') || 
+                    errorMsg.includes('balance') ||
+                    errorMsg.includes('fund')) {
+                    
+                    console.log(`⚠️ Provider API says: "${proxyData.error}". Adding to queue...`);
+                    
+                    await addOrderToQueue({
+                        order_id: orderId,
+                        user_id: userId,
+                        service_id: serviceId,
+                        service_name: serviceName,
+                        link: link,
+                        quantity: quantity,
+                        charge: charge,
+                        provider_charge: providerCharge,
+                        provider: provider || 'premium',
+                        currency: currency || 'LKR'
+                    });
+
+                    // Insert into orders table with 'queued' status
+                    await db.query(
+                        `INSERT INTO orders 
+                         (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, currency, link, start_count, remains, status, is_api_order, is_queued) 
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, charge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
+                    );
+
+                    return res.status(201).json({
+                        success: true,
+                        message: 'Order queued due to insufficient provider funds',
+                        orderId: orderId,
+                        status: 'queued'
+                    });
+                }
+
+                // Other errors - return error
+                console.error(`❌ Provider API error:`, proxyData.error);
+                return res.status(400).json({
+                    error: proxyData.error,
+                    details: proxyData
+                });
+            }
+
+            // ===== ORDER SUCCESSFUL =====
             if (proxyData && proxyData.order) {
                 const providerOrderId = proxyData.order;
                 
@@ -211,46 +173,10 @@ exports.createOrder = async (req, res) => {
                 });
             }
 
-            // If provider API returned an error about funds
-            if (proxyData.error && (
-                proxyData.error.toLowerCase().includes('fund') || 
-                proxyData.error.toLowerCase().includes('balance') ||
-                proxyData.error.toLowerCase().includes('insufficient')
-            )) {
-                console.log(`⚠️ Provider API says insufficient funds. Adding to queue...`);
-                
-                await addOrderToQueue({
-                    order_id: orderId,
-                    user_id: userId,
-                    service_id: serviceId,
-                    service_name: serviceName,
-                    link: link,
-                    quantity: quantity,
-                    charge: charge,
-                    provider_charge: providerCharge,
-                    provider: provider || 'premium',
-                    currency: currency || 'LKR'
-                });
-
-                await db.query(
-                    `INSERT INTO orders 
-                     (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, currency, link, start_count, remains, status, is_api_order, is_queued) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, charge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
-                );
-
-                return res.status(201).json({
-                    success: true,
-                    message: 'Order queued due to insufficient provider funds',
-                    orderId: orderId,
-                    status: 'queued'
-                });
-            }
-
-            // If provider API returned other error
-            console.error(`❌ Provider API error:`, proxyData);
+            // If we get here, something unexpected happened
+            console.error(`❌ Unexpected API response:`, proxyData);
             return res.status(400).json({
-                error: proxyData.error || 'Provider API error',
+                error: 'Unexpected API response',
                 details: proxyData
             });
 
@@ -293,7 +219,7 @@ exports.createOrder = async (req, res) => {
 };
 
 // ================================================================
-// ===== PROCESS QUEUED ORDERS - NEW FUNCTION =====
+// ===== PROCESS QUEUED ORDERS =====
 // ================================================================
 exports.processQueuedOrders = async (req, res) => {
     try {
@@ -314,101 +240,134 @@ exports.processQueuedOrders = async (req, res) => {
 
         console.log(`📦 Found ${queuedOrders.length} queued orders`);
 
-        // Get current provider balance
-        const providerBalance = await getProviderBalanceFromAPI();
-        console.log(`💰 Current provider balance: LKR ${providerBalance}`);
-
         let processed = 0;
         let failed = 0;
         const results = [];
 
         for (const order of queuedOrders) {
-            const requiredBalance = parseFloat(order.provider_charge);
-            
-            // Check if we have enough balance
-            if (providerBalance >= requiredBalance) {
-                console.log(`✅ Processing order ${order.order_id}...`);
+            console.log(`✅ Processing order ${order.order_id}...`);
 
-                try {
-                    // Process the order
-                    const params = {
-                        action: 'add',
-                        service: order.service_id,
-                        link: order.link,
-                        quantity: order.quantity || '0'
-                    };
+            try {
+                const params = {
+                    action: 'add',
+                    service: order.service_id,
+                    link: order.link,
+                    quantity: order.quantity || '0'
+                };
 
-                    const proxyResponse = await fetch('https://api.dzd-marketing.site/api/proxy', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ provider: order.provider || 'premium', ...params })
-                    });
+                console.log(`📤 Processing order ${order.order_id}:`, params);
 
-                    const proxyData = await proxyResponse.json();
+                const proxyResponse = await fetch('https://api.dzd-marketing.site/api/proxy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: order.provider || 'premium', ...params })
+                });
 
-                    if (proxyData && proxyData.order) {
-                        // Update order in orders table
+                const proxyData = await proxyResponse.json();
+                console.log(`📥 Response for ${order.order_id}:`, proxyData);
+
+                // ===== CHECK FOR NOT ENOUGH FUNDS ERROR =====
+                if (proxyData.error) {
+                    const errorMsg = proxyData.error.toLowerCase();
+                    
+                    if (errorMsg.includes('not enough funds') || 
+                        errorMsg.includes('insufficient') || 
+                        errorMsg.includes('balance') ||
+                        errorMsg.includes('fund')) {
+                        
+                        console.log(`⏳ Order ${order.order_id} still has insufficient funds. Keeping in queue.`);
+                        
+                        // Update queue with error but keep as pending
                         await db.query(
-                            `UPDATE orders 
-                             SET status = 'Processing', 
-                                 provider_order_id = ?,
-                                 is_queued = 0,
-                                 updated_at = NOW()
+                            `UPDATE order_queue 
+                             SET error_message = ?, last_attempt = NOW(), attempt_count = attempt_count + 1 
                              WHERE order_id = ?`,
-                            [proxyData.order, order.order_id]
+                            [proxyData.error, order.order_id]
                         );
-
-                        // Update queue status
-                        await db.query(
-                            `UPDATE order_queue SET status = 'processed', processed_at = NOW() WHERE order_id = ?`,
-                            [order.order_id]
-                        );
-
-                        processed++;
+                        
                         results.push({
                             order_id: order.order_id,
-                            status: 'processed',
-                            provider_order_id: proxyData.order
+                            status: 'pending',
+                            error: proxyData.error
                         });
-
-                        console.log(`✅ Order ${order.order_id} processed successfully`);
-                    } else {
-                        // Failed to process
-                        await db.query(
-                            `UPDATE order_queue SET status = 'failed', error_message = ?, processed_at = NOW() WHERE order_id = ?`,
-                            [proxyData.error || 'Unknown error', order.order_id]
-                        );
-
-                        failed++;
-                        results.push({
-                            order_id: order.order_id,
-                            status: 'failed',
-                            error: proxyData.error || 'Unknown error'
-                        });
-
-                        console.log(`❌ Order ${order.order_id} failed: ${proxyData.error}`);
+                        
+                        // Stop processing - if one fails with funds error, the rest will too
+                        break;
                     }
 
-                } catch (error) {
-                    console.error(`❌ Error processing order ${order.order_id}:`, error);
-                    
+                    // Other errors - mark as failed
                     await db.query(
                         `UPDATE order_queue SET status = 'failed', error_message = ?, processed_at = NOW() WHERE order_id = ?`,
-                        [error.message, order.order_id]
+                        [proxyData.error, order.order_id]
                     );
 
                     failed++;
                     results.push({
                         order_id: order.order_id,
                         status: 'failed',
-                        error: error.message
+                        error: proxyData.error
+                    });
+
+                    console.log(`❌ Order ${order.order_id} failed: ${proxyData.error}`);
+                    continue;
+                }
+
+                // ===== ORDER SUCCESSFUL =====
+                if (proxyData && proxyData.order) {
+                    // Update order in orders table
+                    await db.query(
+                        `UPDATE orders 
+                         SET status = 'Processing', 
+                             provider_order_id = ?,
+                             is_queued = 0,
+                             updated_at = NOW()
+                         WHERE order_id = ?`,
+                        [proxyData.order, order.order_id]
+                    );
+
+                    // Update queue status
+                    await db.query(
+                        `UPDATE order_queue SET status = 'processed', processed_at = NOW() WHERE order_id = ?`,
+                        [order.order_id]
+                    );
+
+                    processed++;
+                    results.push({
+                        order_id: order.order_id,
+                        status: 'processed',
+                        provider_order_id: proxyData.order
+                    });
+
+                    console.log(`✅ Order ${order.order_id} processed successfully`);
+                } else {
+                    // Unexpected response
+                    await db.query(
+                        `UPDATE order_queue SET status = 'failed', error_message = ?, processed_at = NOW() WHERE order_id = ?`,
+                        ['Unexpected API response', order.order_id]
+                    );
+
+                    failed++;
+                    results.push({
+                        order_id: order.order_id,
+                        status: 'failed',
+                        error: 'Unexpected API response'
                     });
                 }
 
-            } else {
-                console.log(`⏳ Insufficient balance for order ${order.order_id}. Need ${requiredBalance}, have ${providerBalance}`);
-                // Stop processing further orders since balance is insufficient
-                break;
+            } catch (error) {
+                console.error(`❌ Error processing order ${order.order_id}:`, error);
+                
+                await db.query(
+                    `UPDATE order_queue SET status = 'failed', error_message = ?, processed_at = NOW() WHERE order_id = ?`,
+                    [error.message, order.order_id]
+                );
+
+                failed++;
+                results.push({
+                    order_id: order.order_id,
+                    status: 'failed',
+                    error: error.message
+                });
             }
         }
 
@@ -417,8 +376,7 @@ exports.processQueuedOrders = async (req, res) => {
             message: `Processed ${processed} orders, ${failed} failed`,
             processed: processed,
             failed: failed,
-            results: results,
-            remaining_balance: providerBalance
+            results: results
         });
 
     } catch (error) {
@@ -445,6 +403,36 @@ exports.getQueuedOrders = async (req, res) => {
     } catch (error) {
         console.error('❌ Error fetching queued orders:', error);
         res.status(500).json({ error: 'Failed to fetch queued orders' });
+    }
+};
+
+// ================================================================
+// ===== RETRY FAILED QUEUED ORDER =====
+// ================================================================
+exports.retryQueuedOrder = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
+        const [result] = await db.query(
+            `UPDATE order_queue SET status = 'pending', error_message = NULL, last_attempt = NULL WHERE order_id = ? AND status = 'failed'`,
+            [orderId]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Order not found or not in failed status'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `Order ${orderId} reset to pending for retry`
+        });
+
+    } catch (error) {
+        console.error('❌ Error retrying order:', error);
+        res.status(500).json({ error: 'Failed to retry order' });
     }
 };
 
