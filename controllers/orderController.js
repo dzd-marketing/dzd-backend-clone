@@ -17,7 +17,6 @@ exports.getUserOrders = async (req, res) => {
   }
 };
 
-// Get single order by ID
 exports.getOrderById = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -56,7 +55,6 @@ exports.createOrder = async (req, res) => {
       status 
     } = req.body;
 
-    // Check if order already exists
     const [existing] = await db.query(
       'SELECT id FROM orders WHERE order_id = ?',
       [orderId]
@@ -66,22 +64,151 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ error: 'Order already exists' });
     }
 
-    await db.query(
-      `INSERT INTO orders (order_id, user_id, service_id, service_name, provider, quantity, charge, currency, link, start_count, remains, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [orderId, userId, serviceId, serviceName, provider, quantity, charge, currency, link, start_count, remains, status]
-    );
+    const providerCharge = parseFloat(charge) * 0.8;
 
-    res.status(201).json({ 
-      success: true, 
-      message: 'Order created successfully',
-      orderId
-    });
+    const providerBalance = await getProviderBalanceFromAPI();
+
+    console.log(`💰 Provider balance: LKR ${providerBalance}`);
+    console.log(`📦 Order charge: LKR ${charge}, Provider cost: LKR ${providerCharge}`);
+
+    if (providerBalance >= providerCharge) {
+      console.log(`✅ Provider has balance. Processing order directly...`);
+
+      const params = {
+        action: 'add',
+        service: serviceId,
+        link: link,
+        quantity: quantity || '0'
+      };
+
+      const proxyResponse = await fetch('https://api.dzd-marketing.site/api/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: provider || 'premium', ...params })
+      });
+
+      const proxyData = await proxyResponse.json();
+
+      if (proxyData && proxyData.order) {
+        await db.query(
+          `INSERT INTO orders (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, currency, link, start_count, remains, status, is_api_order) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [proxyData.order, userId, serviceId, serviceName, provider || 'premium', quantity, charge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Pending', 1]
+        );
+
+        return res.status(201).json({
+          success: true,
+          message: 'Order created successfully',
+          orderId: proxyData.order,
+          status: 'completed'
+        });
+      } else {
+        if (proxyData.error && proxyData.error.includes('Not enough funds')) {
+          console.log(`⚠️ API says insufficient funds. Adding to queue...`);
+          await addOrderToQueue({
+            order_id: orderId,
+            user_id: userId,
+            service_id: serviceId,
+            service_name: serviceName,
+            link: link,
+            quantity: quantity,
+            charge: charge,
+            provider_charge: providerCharge,
+            provider: provider || 'premium',
+            currency: currency || 'LKR'
+          });
+
+          return res.status(201).json({
+            success: true,
+            message: 'Order queued for processing',
+            orderId: orderId,
+            status: 'queued'
+          });
+        }
+
+        return res.status(400).json(proxyData);
+      }
+    } else {
+      console.log(`⚠️ Provider balance insufficient. Adding to queue...`);
+
+      await addOrderToQueue({
+        order_id: orderId,
+        user_id: userId,
+        service_id: serviceId,
+        service_name: serviceName,
+        link: link,
+        quantity: quantity,
+        charge: charge,
+        provider_charge: providerCharge,
+        provider: provider || 'premium',
+        currency: currency || 'LKR'
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: 'Order queued for processing. Will be processed when provider balance is available.',
+        orderId: orderId,
+        status: 'queued'
+      });
+    }
+
   } catch (error) {
     console.error('Error creating order:', error);
     res.status(500).json({ error: 'Failed to create order' });
   }
 };
+
+async function getProviderBalanceFromAPI() {
+  try {
+    const response = await fetch('https://api.dzd-marketing.site/api/v2/balance?key=13bc74956904c166');
+    const data = await response.json();
+    return data.balance || 0;
+  } catch (error) {
+    console.error('❌ Error fetching provider balance:', error);
+    return 0;
+  }
+}
+
+async function addOrderToQueue(orderData) {
+  try {
+    const {
+      order_id,
+      user_id,
+      service_id,
+      service_name,
+      link,
+      quantity,
+      charge,
+      provider_charge,
+      provider = 'premium',
+      currency = 'LKR'
+    } = orderData;
+
+    // Check if already in queue
+    const [existing] = await db.query(
+      'SELECT id FROM order_queue WHERE order_id = ?',
+      [order_id]
+    );
+
+    if (existing.length > 0) {
+      return { success: false, message: 'Order already in queue' };
+    }
+
+    await db.query(
+      `INSERT INTO order_queue 
+       (order_id, user_id, service_id, service_name, link, quantity, charge, provider_charge, provider, currency, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [order_id, user_id, service_id, service_name, link, quantity, charge, provider_charge, provider, currency]
+    );
+
+    console.log(`📥 Order ${order_id} added to queue`);
+    return { success: true };
+
+  } catch (error) {
+    console.error('❌ Error adding order to queue:', error);
+    return { success: false, message: error.message };
+  }
+}
 
 // Update order status
 exports.updateOrderStatus = async (req, res) => {
