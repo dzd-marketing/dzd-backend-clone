@@ -3,6 +3,7 @@ const router = express.Router();
 const orderController = require('../controllers/orderController');
 const refundController = require('../controllers/refundController');
 
+// ✅ Existing routes
 router.get('/user/:userId', orderController.getUserOrders);
 router.get('/:orderId', orderController.getOrderById);
 router.post('/', orderController.createOrder);
@@ -12,22 +13,21 @@ router.get('/recent/:userId', orderController.getRecentOrders);
 router.get('/admin/api-orders', orderController.getApiOrders);
 router.get('/admin/api-orders/stats', orderController.getApiOrderStats);
 
-// New routes with refund info
+// Refund routes
 router.get('/user/:userId/with-refunds', orderController.getUserOrdersWithRefunds);
 router.get('/user/:userId/total-refunded', orderController.getUserTotalRefunded);
-
-// Refund routes
 router.get('/refunds/user/:userId', refundController.getUserRefundHistory);
 router.get('/refunds/order/:orderId', refundController.getOrderRefundDetails);
 router.get('/refunds/summary/:userId', refundController.getRefundSummary);
 router.post('/refunds/process', refundController.processRefund);
 
-//queue routes 
-router.post('/create-queue-order', orderController.createQueueOrder);
+// ✅ QUEUE ROUTES - ALL MUST BE DEFINED
+router.post('/create-queue-order', orderController.createQueueOrder);  // <<< මෙය හරිද?
 router.delete('/delete-queue-order/:orderId', orderController.deleteQueueOrder);
 router.get('/queue-orders', orderController.getQueueOrders);
 router.post('/send-queue-order/:orderId', orderController.sendQueueOrderToApi);
 
+// Admin orders
 router.get('/admin/orders', async (req, res) => {
   try {
     const db = require('../config/db');
