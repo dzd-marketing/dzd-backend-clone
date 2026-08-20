@@ -1,5 +1,284 @@
 const db = require('../config/db');
 
+// ─── CREATE QUEUE ORDER (User balance deducted, provider not yet) ───
+exports.createQueueOrder = async (req, res) => {
+  try {
+    const { 
+      userId, 
+      serviceId, 
+      serviceName, 
+      provider, 
+      quantity, 
+      charge, 
+      currency, 
+      link, 
+      status,
+      apiParams 
+    } = req.body;
+
+    // Generate temporary order ID (will be updated when sent to API)
+    const tempOrderId = `QUEUE_${Date.now()}_${userId.slice(0, 6)}`;
+
+    // Insert order with QUEUE status
+    const [result] = await db.query(
+      `INSERT INTO orders (
+        order_id, user_id, service_id, service_name, provider, 
+        quantity, charge, currency, link, status, 
+        api_params, is_queue_order, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      [
+        tempOrderId, 
+        userId, 
+        serviceId, 
+        serviceName, 
+        provider, 
+        quantity, 
+        charge, 
+        currency, 
+        link, 
+        'QUEUE',
+        JSON.stringify(apiParams || {}),
+        1 // is_queue_order = 1
+      ]
+    );
+
+    res.status(201).json({ 
+      success: true, 
+      message: 'Order queued successfully',
+      orderId: tempOrderId
+    });
+  } catch (error) {
+    console.error('Error creating queue order:', error);
+    res.status(500).json({ error: 'Failed to create queue order' });
+  }
+};
+
+// ─── DELETE ORDER (Rollback) ───
+exports.deleteOrder = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    
+    const [result] = await db.query(
+      'DELETE FROM orders WHERE order_id = ? AND is_queue_order = 1',
+      [orderId]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Order not found or not a queue order' });
+    }
+    
+    res.json({ success: true, message: 'Order deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting order:', error);
+    res.status(500).json({ error: 'Failed to delete order' });
+  }
+};
+
+// ─── GET QUEUE ORDERS (For Cron-Job) ───
+exports.getQueueOrders = async (req, res) => {
+  try {
+    const [orders] = await db.query(
+      `SELECT * FROM orders 
+       WHERE status = 'QUEUE' 
+       AND is_queue_order = 1 
+       ORDER BY created_at ASC`
+    );
+    
+    res.json({
+      success: true,
+      orders
+    });
+  } catch (error) {
+    console.error('Error fetching queue orders:', error);
+    res.status(500).json({ error: 'Failed to fetch queue orders' });
+  }
+};
+
+// ─── PROCESS QUEUE ORDER (Called by Cron-Job) ───
+exports.processQueueOrder = async (req, res) => {
+  try {
+    const { orderId, providerBalance } = req.body;
+    
+    // Get the queue order
+    const [orders] = await db.query(
+      'SELECT * FROM orders WHERE order_id = ? AND status = "QUEUE" AND is_queue_order = 1',
+      [orderId]
+    );
+    
+    if (orders.length === 0) {
+      return res.status(404).json({ error: 'Queue order not found' });
+    }
+    
+    const order = orders[0];
+    
+    // Check provider balance
+    if (providerBalance < order.charge) {
+      return res.status(400).json({ 
+        error: 'Insufficient provider balance',
+        required: order.charge,
+        available: providerBalance
+      });
+    }
+    
+    // Update order status to PROCESSING
+    await db.query(
+      `UPDATE orders 
+       SET status = 'PROCESSING', 
+           is_queue_order = 0,
+           updated_at = NOW() 
+       WHERE order_id = ?`,
+      [orderId]
+    );
+    
+    res.json({
+      success: true,
+      message: 'Order processed successfully',
+      orderId
+    });
+  } catch (error) {
+    console.error('Error processing queue order:', error);
+    res.status(500).json({ error: 'Failed to process queue order' });
+  }
+};
+
+// ─── SEND QUEUE ORDER TO API (Called by Cron-Job) ───
+exports.sendQueueOrderToApi = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    
+    // Get the order with QUEUE status
+    const [orders] = await db.query(
+      'SELECT * FROM orders WHERE order_id = ? AND status = "QUEUE" AND is_queue_order = 1',
+      [orderId]
+    );
+    
+    if (orders.length === 0) {
+      return res.status(404).json({ error: 'Queue order not found' });
+    }
+    
+    const order = orders[0];
+    
+    // Parse API params
+    const apiParams = JSON.parse(order.api_params || '{}');
+    
+    // Call the actual API
+    const response = await fetch(SMM_PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        provider: 'premium', 
+        ...apiParams 
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (data && data.order) {
+      // ✅ Success - Update order with real ID
+      const realOrderId = data.order;
+      
+      await db.query(
+        `UPDATE orders 
+         SET order_id = ?, 
+             status = 'PENDING', 
+             is_queue_order = 0,
+             api_response = ?,
+             updated_at = NOW() 
+         WHERE order_id = ?`,
+        [realOrderId, JSON.stringify(data), orderId]
+      );
+      
+      res.json({
+        success: true,
+        message: 'Order sent to API successfully',
+        oldOrderId: orderId,
+        newOrderId: realOrderId,
+        apiResponse: data
+      });
+    } else if (data?.error) {
+      // ❌ API Error - Check if it's balance error
+      if (data.error.includes('Not enough funds') || data.error.includes('balance')) {
+        // Keep as QUEUE - will retry later
+        await db.query(
+          `UPDATE orders 
+           SET last_error = ?,
+               retry_count = retry_count + 1,
+               updated_at = NOW() 
+           WHERE order_id = ?`,
+          [data.error, orderId]
+        );
+        
+        res.json({
+          success: false,
+          error: data.error,
+          retryable: true,
+          message: 'Provider balance insufficient, will retry later'
+        });
+      } else {
+        // Other error - mark as FAILED
+        await db.query(
+          `UPDATE orders 
+           SET status = 'FAILED',
+               is_queue_order = 0,
+               last_error = ?,
+               updated_at = NOW() 
+           WHERE order_id = ?`,
+          [data.error, orderId]
+        );
+        
+        // Refund user
+        await refundUser(order.user_id, order.charge, `Refund for failed order #${orderId}`);
+        
+        res.json({
+          success: false,
+          error: data.error,
+          retryable: false,
+          message: 'Order failed, user refunded'
+        });
+      }
+    } else {
+      // Unknown response
+      await db.query(
+        `UPDATE orders 
+         SET last_error = 'Unknown API response',
+             retry_count = retry_count + 1,
+             updated_at = NOW() 
+         WHERE order_id = ?`,
+        [orderId]
+      );
+      
+      res.json({
+        success: false,
+        error: 'Unknown API response',
+        retryable: true
+      });
+    }
+  } catch (error) {
+    console.error('Error sending queue order to API:', error);
+    res.status(500).json({ error: 'Failed to send order to API' });
+  }
+};
+
+// ─── HELPER: Refund user ───
+async function refundUser(userId, amount, description) {
+  try {
+    const refundRes = await fetch(`${process.env.WORKER_URL}/add-balance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        amount: parseFloat(amount),
+        description
+      })
+    });
+    return await refundRes.json();
+  } catch (error) {
+    console.error('Refund failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+//---------------------------------------------------------------------------------------------------------------------------------------
+
 // Get all orders for a user
 exports.getUserOrders = async (req, res) => {
   try {
