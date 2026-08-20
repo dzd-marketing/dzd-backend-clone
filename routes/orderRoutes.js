@@ -1,33 +1,42 @@
 const express = require('express');
 const router = express.Router();
 const orderController = require('../controllers/orderController');
-const refundController = require('../controllers/refundController');
 
-// ✅ Existing routes
-router.get('/user/:userId', orderController.getUserOrders);
-router.get('/:orderId', orderController.getOrderById);
+// ============================================
+// ✅ MAIN ORDER ROUTES
+// ============================================
+
+// ✅ Single endpoint for ALL orders (Handles both Normal & Queue)
 router.post('/', orderController.createOrder);
+
+// Get user orders
+router.get('/user/:userId', orderController.getUserOrders);
+
+// Get single order
+router.get('/:orderId', orderController.getOrderById);
+
+// Update order status
 router.patch('/:orderId/status', orderController.updateOrderStatus);
+
+// Order stats
 router.get('/stats/:userId', orderController.getOrderStats);
+
+// Recent orders
 router.get('/recent/:userId', orderController.getRecentOrders);
+
+// Orders with refunds
+router.get('/user/:userId/with-refunds', orderController.getUserOrdersWithRefunds);
+
+// Total refunded
+router.get('/user/:userId/total-refunded', orderController.getUserTotalRefunded);
+
+// ============================================
+// ✅ ADMIN ROUTES
+// ============================================
+
 router.get('/admin/api-orders', orderController.getApiOrders);
 router.get('/admin/api-orders/stats', orderController.getApiOrderStats);
 
-// Refund routes
-router.get('/user/:userId/with-refunds', orderController.getUserOrdersWithRefunds);
-router.get('/user/:userId/total-refunded', orderController.getUserTotalRefunded);
-router.get('/refunds/user/:userId', refundController.getUserRefundHistory);
-router.get('/refunds/order/:orderId', refundController.getOrderRefundDetails);
-router.get('/refunds/summary/:userId', refundController.getRefundSummary);
-router.post('/refunds/process', refundController.processRefund);
-
-// ✅ QUEUE ROUTES - ALL MUST BE DEFINED
-router.post('/create-queue-order', orderController.createQueueOrder);  // <<< මෙය හරිද?
-router.delete('/delete-queue-order/:orderId', orderController.deleteQueueOrder);
-router.get('/queue-orders', orderController.getQueueOrders);
-router.post('/send-queue-order/:orderId', orderController.sendQueueOrderToApi);
-
-// Admin orders
 router.get('/admin/orders', async (req, res) => {
   try {
     const db = require('../config/db');
@@ -47,5 +56,15 @@ router.get('/admin/orders', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch orders' });
   }
 });
+
+// ============================================
+// ✅ QUEUE MANAGEMENT ROUTES (For Cron-Job)
+// ============================================
+
+// Get all queue orders
+router.get('/queue-orders', orderController.getQueueOrders);
+
+// Send queue order to API
+router.post('/send-queue-order/:orderId', orderController.sendQueueOrderToApi);
 
 module.exports = router;
