@@ -1,10 +1,9 @@
 const db = require('../config/db');
 
-// ================================================================
-// ===== ADD ORDER TO QUEUE =====
-// ================================================================
 async function addOrderToQueue(orderData) {
     try {
+        console.log('📥 addOrderToQueue called with:', orderData);
+        
         const {
             order_id,
             user_id,
@@ -20,7 +19,6 @@ async function addOrderToQueue(orderData) {
 
         console.log(`📥 Adding order ${order_id} to queue...`);
 
-        // Check if already in queue
         const [existing] = await db.query(
             'SELECT id FROM order_queue WHERE order_id = ?',
             [order_id]
@@ -31,14 +29,14 @@ async function addOrderToQueue(orderData) {
             return { success: false, message: 'Order already in queue' };
         }
 
-        await db.query(
+        const result = await db.query(
             `INSERT INTO order_queue 
              (order_id, user_id, service_id, service_name, link, quantity, charge, provider_charge, provider, currency, status, created_at) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())`,
             [order_id, user_id, service_id, service_name, link, quantity, charge, provider_charge, provider, currency]
         );
 
-        console.log(`✅ Order ${order_id} added to queue successfully`);
+        console.log(`✅ Order ${order_id} added to queue successfully`, result);
         return { success: true };
 
     } catch (error) {
@@ -47,10 +45,14 @@ async function addOrderToQueue(orderData) {
     }
 }
 
-// ================================================================
-// ===== CREATE ORDER - WITH BALANCE DEDUCT FOR QUEUED ORDERS =====
-// ================================================================
 exports.createOrder = async (req, res) => {
+    // ✅ DEBUG: Log everything
+    console.log('='.repeat(50));
+    console.log('📥 INCOMING ORDER REQUEST');
+    console.log('📥 Body:', JSON.stringify(req.body, null, 2));
+    console.log('📥 Headers:', req.headers);
+    console.log('='.repeat(50));
+
     try {
         const { 
             userId, 
@@ -67,6 +69,28 @@ exports.createOrder = async (req, res) => {
             status 
         } = req.body;
 
+        // ✅ Check if required fields exist
+        if (!userId) {
+            console.error('❌ Missing userId');
+            return res.status(400).json({ error: 'userId is required' });
+        }
+        if (!orderId) {
+            console.error('❌ Missing orderId');
+            return res.status(400).json({ error: 'orderId is required' });
+        }
+        if (!serviceId) {
+            console.error('❌ Missing serviceId');
+            return res.status(400).json({ error: 'serviceId is required' });
+        }
+        if (!link) {
+            console.error('❌ Missing link');
+            return res.status(400).json({ error: 'link is required' });
+        }
+        if (!charge) {
+            console.error('❌ Missing charge');
+            return res.status(400).json({ error: 'charge is required' });
+        }
+
         console.log(`📦 Creating order: ${orderId} for user ${userId}`);
 
         // Check if order already exists
@@ -76,26 +100,35 @@ exports.createOrder = async (req, res) => {
         );
 
         if (existing.length > 0) {
+            console.log(`⚠️ Order ${orderId} already exists`);
             return res.status(400).json({ error: 'Order already exists' });
         }
 
-        // Calculate provider charge (80% of customer charge)
         const providerCharge = parseFloat(charge) * 0.8;
         const userCharge = parseFloat(charge);
 
-        // ===== DEDUCT USER BALANCE FIRST =====
+        console.log(`💰 User charge: ${userCharge}, Provider charge: ${providerCharge}`);
+
+        // ===== DEDUCT USER BALANCE =====
+        console.log(`🔍 Checking user balance for userId: ${userId}`);
+        
         const [userResult] = await db.query(
             'SELECT balance FROM users WHERE id = ?',
             [userId]
         );
 
+        console.log(`🔍 User result:`, userResult);
+
         if (!userResult.length) {
+            console.error(`❌ User not found: ${userId}`);
             return res.status(404).json({ error: 'User not found' });
         }
 
         const currentBalance = parseFloat(userResult[0].balance) || 0;
+        console.log(`💰 Current balance: ${currentBalance}`);
 
         if (currentBalance < userCharge) {
+            console.log(`❌ Insufficient balance: ${currentBalance} < ${userCharge}`);
             return res.status(400).json({ 
                 error: 'Insufficient balance',
                 currentBalance: currentBalance,
@@ -103,14 +136,14 @@ exports.createOrder = async (req, res) => {
             });
         }
 
-        // Deduct balance from user
         const newBalance = currentBalance - userCharge;
+        console.log(`💰 Deducting balance: ${currentBalance} -> ${newBalance}`);
+        
         await db.query(
             'UPDATE users SET balance = ? WHERE id = ?',
             [newBalance, userId]
         );
-
-        console.log(`💰 User balance deducted: ${currentBalance} -> ${newBalance}`);
+        console.log(`✅ Balance deducted successfully`);
 
         // ===== TRY TO PROCESS ORDER DIRECTLY =====
         console.log(`📤 Processing order directly...`);
@@ -123,7 +156,7 @@ exports.createOrder = async (req, res) => {
                 quantity: quantity || '0'
             };
 
-            console.log(`📤 Sending to provider API:`, params);
+            console.log(`📤 Sending to provider API:`, JSON.stringify(params, null, 2));
 
             const proxyResponse = await fetch('https://api.dzd-marketing.site/api/proxy', {
                 method: 'POST',
@@ -132,13 +165,13 @@ exports.createOrder = async (req, res) => {
             });
 
             const proxyData = await proxyResponse.json();
-            console.log(`📥 Provider API response:`, proxyData);
+            console.log(`📥 Provider API response:`, JSON.stringify(proxyData, null, 2));
 
             // ===== CHECK FOR NOT ENOUGH FUNDS ERROR =====
             if (proxyData.error) {
                 const errorMsg = proxyData.error.toLowerCase();
+                console.log(`🔍 Error message: "${errorMsg}"`);
                 
-                // If error is about insufficient funds, queue the order
                 if (errorMsg.includes('not enough funds') || 
                     errorMsg.includes('insufficient') || 
                     errorMsg.includes('balance') ||
@@ -146,7 +179,8 @@ exports.createOrder = async (req, res) => {
                     
                     console.log(`⚠️ Provider API says: "${proxyData.error}". Adding to queue...`);
                     
-                    await addOrderToQueue({
+                    // ✅ Add to queue
+                    const queueResult = await addOrderToQueue({
                         order_id: orderId,
                         user_id: userId,
                         service_id: serviceId,
@@ -159,12 +193,17 @@ exports.createOrder = async (req, res) => {
                         currency: currency || 'LKR'
                     });
 
+                    console.log(`📥 Queue result:`, queueResult);
+
+                    // ✅ Insert into orders table
                     await db.query(
                         `INSERT INTO orders 
                          (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, currency, link, start_count, remains, status, is_api_order, is_queued) 
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                         [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, userCharge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
                     );
+
+                    console.log(`✅ Order ${orderId} inserted into orders table with Queued status`);
 
                     return res.status(201).json({
                         success: true,
@@ -176,12 +215,13 @@ exports.createOrder = async (req, res) => {
                 }
 
                 // Other errors - refund the user
-                console.error(`❌ Provider API error:`, proxyData.error);
+                console.error(`❌ Provider API error (non-funds):`, proxyData.error);
                 
                 await db.query(
                     'UPDATE users SET balance = ? WHERE id = ?',
                     [currentBalance, userId]
                 );
+                console.log(`💰 Balance refunded: ${newBalance} -> ${currentBalance}`);
                 
                 return res.status(400).json({
                     error: proxyData.error,
@@ -193,6 +233,7 @@ exports.createOrder = async (req, res) => {
             // ===== ORDER SUCCESSFUL =====
             if (proxyData && proxyData.order) {
                 const providerOrderId = proxyData.order;
+                console.log(`✅ Order successful! Provider order ID: ${providerOrderId}`);
                 
                 await db.query(
                     `INSERT INTO orders 
@@ -200,6 +241,8 @@ exports.createOrder = async (req, res) => {
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, userCharge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Processing', 1, providerOrderId]
                 );
+
+                console.log(`✅ Order ${orderId} inserted into orders table with Processing status`);
 
                 return res.status(201).json({
                     success: true,
@@ -218,6 +261,7 @@ exports.createOrder = async (req, res) => {
                 'UPDATE users SET balance = ? WHERE id = ?',
                 [currentBalance, userId]
             );
+            console.log(`💰 Balance refunded: ${newBalance} -> ${currentBalance}`);
             
             return res.status(400).json({
                 error: 'Unexpected API response',
@@ -227,6 +271,7 @@ exports.createOrder = async (req, res) => {
 
         } catch (apiError) {
             console.error(`❌ Provider API call failed:`, apiError.message);
+            console.error(`❌ Error stack:`, apiError.stack);
             
             // If API call fails, queue the order (balance already deducted)
             await addOrderToQueue({
@@ -249,6 +294,8 @@ exports.createOrder = async (req, res) => {
                 [orderId, userId, serviceId, serviceName, provider || 'premium', quantity, userCharge, providerCharge, currency, link, start_count || '0', remains || quantity, 'Queued', 1, 1]
             );
 
+            console.log(`✅ Order ${orderId} queued due to API error`);
+
             return res.status(201).json({
                 success: true,
                 message: 'Order queued due to API error. Balance deducted.',
@@ -259,8 +306,12 @@ exports.createOrder = async (req, res) => {
         }
 
     } catch (error) {
-        console.error('❌ Error creating order:', error);
-        res.status(500).json({ error: 'Failed to create order: ' + error.message });
+        console.error('❌ FATAL Error creating order:', error);
+        console.error('❌ Error stack:', error.stack);
+        res.status(500).json({ 
+            error: 'Failed to create order: ' + error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 };
 
