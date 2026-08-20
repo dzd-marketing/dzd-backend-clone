@@ -50,12 +50,11 @@ exports.getOrderById = async (req, res) => {
   }
 };
 
-// ─── CREATE NEW ORDER ───
+// ─── CREATE NEW ORDER (Single Endpoint - Handles both Normal & Queue) ───
 exports.createOrder = async (req, res) => {
   try {
     const { 
       userId, 
-      orderId, 
       serviceId, 
       serviceName, 
       provider, 
@@ -65,32 +64,147 @@ exports.createOrder = async (req, res) => {
       link, 
       start_count, 
       remains, 
-      status 
+      status,
+      apiParams,
+      providerCharge
     } = req.body;
 
+    // ✅ STEP 1: Check Provider Balance
+    const [providers] = await db.query(
+      'SELECT balance FROM providers WHERE name = ?',
+      [provider || 'premium']
+    );
+    
+    let providerBalance = 0;
+    if (providers.length > 0) {
+      providerBalance = parseFloat(providers[0].balance) || 0;
+    }
+    
+    const orderCharge = parseFloat(charge) || 0;
+    const isQueueOrder = providerBalance < orderCharge;
+    
+    let orderId;
+    let finalStatus;
+    let apiResponse = null;
+    let realOrderId = null;
+    
+    // ✅ STEP 2: If provider has enough balance, call API directly
+    if (!isQueueOrder) {
+      try {
+        const apiParamsObj = apiParams || {
+          action: 'add',
+          service: serviceId,
+          link: link,
+          quantity: quantity.toString()
+        };
+        
+        const SMM_PROXY_URL = process.env.SMM_PROXY_URL || 'https://api.dzd-marketing.site/api/proxy';
+        const response = await fetch(SMM_PROXY_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            provider: provider || 'premium', 
+            ...apiParamsObj 
+          })
+        });
+        
+        const data = await response.json();
+        apiResponse = data;
+        
+        if (data && data.order) {
+          realOrderId = data.order.toString();
+          orderId = realOrderId;
+          finalStatus = 'PENDING';
+          
+          // ✅ Deduct provider balance
+          await db.query(
+            'UPDATE providers SET balance = balance - ? WHERE name = ?',
+            [orderCharge, provider || 'premium']
+          );
+        } else {
+          // API failed - queue the order
+          isQueueOrder = true;
+          orderId = `QUEUE_${Date.now()}_${userId.slice(0, 6)}`;
+          finalStatus = 'QUEUE';
+        }
+      } catch (error) {
+        console.error('API call failed, queueing order:', error);
+        isQueueOrder = true;
+        orderId = `QUEUE_${Date.now()}_${userId.slice(0, 6)}`;
+        finalStatus = 'QUEUE';
+      }
+    } else {
+      // ✅ STEP 3: Provider balance insufficient - Queue the order
+      orderId = `QUEUE_${Date.now()}_${userId.slice(0, 6)}`;
+      finalStatus = 'QUEUE';
+    }
+    
+    // ✅ STEP 4: Save to order_queue table
+    await db.query(
+      `INSERT INTO order_queue (
+        order_id, user_id, service_id, service_name, provider, 
+        quantity, charge, currency, link, provider_charge, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        orderId, 
+        userId, 
+        serviceId, 
+        serviceName, 
+        provider || 'premium', 
+        quantity, 
+        charge, 
+        currency || 'LKR', 
+        link,
+        providerCharge || 0,
+        finalStatus.toLowerCase()
+      ]
+    );
+
+    // ✅ STEP 5: Save to main orders table
     const [existing] = await db.query(
       'SELECT id FROM orders WHERE order_id = ?',
       [orderId]
     );
 
-    if (existing.length > 0) {
-      return res.status(400).json({ error: 'Order already exists' });
+    if (existing.length === 0) {
+      await db.query(
+        `INSERT INTO orders (
+          order_id, user_id, service_id, service_name, provider, 
+          quantity, charge, currency, link, start_count, remains, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          orderId, 
+          userId, 
+          serviceId, 
+          serviceName, 
+          provider || 'premium', 
+          quantity, 
+          charge, 
+          currency || 'LKR', 
+          link, 
+          start_count || 0, 
+          remains || quantity,
+          finalStatus
+        ]
+      );
     }
 
-    await db.query(
-      `INSERT INTO orders (order_id, user_id, service_id, service_name, provider, quantity, charge, currency, link, start_count, remains, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [orderId, userId, serviceId, serviceName, provider, quantity, charge, currency, link, start_count, remains, status]
-    );
-
+    // ✅ STEP 6: Return response
     res.status(201).json({ 
       success: true, 
-      message: 'Order created successfully',
-      orderId
+      message: isQueueOrder ? 'Order queued successfully' : 'Order placed successfully',
+      orderId: orderId,
+      queue_order: isQueueOrder,
+      real_order_id: realOrderId,
+      api_response: apiResponse
     });
+    
   } catch (error) {
     console.error('Error creating order:', error);
-    res.status(500).json({ error: 'Failed to create order' });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to create order' 
+    });
   }
 };
 
@@ -134,7 +248,7 @@ exports.updateOrderStatus = async (req, res) => {
       values
     );
 
-    // ✅ Also update queue if status is completed or failed
+    // Also update queue if status is completed or failed
     if (status && (status.toLowerCase().includes('complete') || status.toLowerCase().includes('success'))) {
       await db.query(
         `UPDATE order_queue 
@@ -320,103 +434,7 @@ exports.getApiOrderStats = async (req, res) => {
 
 // ─── QUEUE ROUTES ───
 
-// ─── CREATE QUEUE ORDER ───
-exports.createQueueOrder = async (req, res) => {
-  try {
-    const { 
-      userId, 
-      serviceId, 
-      serviceName, 
-      provider, 
-      quantity, 
-      charge, 
-      currency, 
-      link,
-      providerCharge
-    } = req.body;
-
-    const tempOrderId = `QUEUE_${Date.now()}_${userId.slice(0, 6)}`;
-
-    await db.query(
-      `INSERT INTO order_queue (
-        order_id, user_id, service_id, service_name, provider, 
-        quantity, charge, currency, link, provider_charge, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        tempOrderId, 
-        userId, 
-        serviceId, 
-        serviceName, 
-        provider || 'premium', 
-        quantity, 
-        charge, 
-        currency || 'LKR', 
-        link,
-        providerCharge || 0,
-        'queue'
-      ]
-    );
-
-    const [existing] = await db.query(
-      'SELECT id FROM orders WHERE order_id = ?',
-      [tempOrderId]
-    );
-
-    if (existing.length === 0) {
-      await db.query(
-        `INSERT INTO orders (
-          order_id, user_id, service_id, service_name, provider, 
-          quantity, charge, currency, link, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          tempOrderId, 
-          userId, 
-          serviceId, 
-          serviceName, 
-          provider || 'premium', 
-          quantity, 
-          charge, 
-          currency || 'LKR', 
-          link,
-          'queue'
-        ]
-      );
-    }
-
-    res.status(201).json({ 
-      success: true, 
-      message: 'Order queued successfully',
-      orderId: tempOrderId
-    });
-  } catch (error) {
-    console.error('Error creating queue order:', error);
-    res.status(500).json({ error: 'Failed to create queue order' });
-  }
-};
-
-// ─── DELETE QUEUE ORDER ───
-exports.deleteQueueOrder = async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    
-    await db.query(
-      'DELETE FROM order_queue WHERE order_id = ?',
-      [orderId]
-    );
-    
-    await db.query(
-      'DELETE FROM orders WHERE order_id = ? AND status = "queue"',
-      [orderId]
-    );
-    
-    res.json({ success: true, message: 'Queue order deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting queue order:', error);
-    res.status(500).json({ error: 'Failed to delete queue order' });
-  }
-};
-
-// ─── GET QUEUE ORDERS ───
+// ─── GET QUEUE ORDERS (For Cron-Job) ───
 exports.getQueueOrders = async (req, res) => {
   try {
     const [orders] = await db.query(
@@ -435,7 +453,7 @@ exports.getQueueOrders = async (req, res) => {
   }
 };
 
-// ─── SEND QUEUE ORDER TO API ───
+// ─── SEND QUEUE ORDER TO API (Cron-Job) ───
 exports.sendQueueOrderToApi = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -497,6 +515,7 @@ exports.sendQueueOrderToApi = async (req, res) => {
     if (data && data.order) {
       const realOrderId = data.order;
       
+      // Update queue order
       await db.query(
         `UPDATE order_queue 
          SET status = 'pending',
@@ -506,6 +525,7 @@ exports.sendQueueOrderToApi = async (req, res) => {
         [realOrderId, orderId]
       );
       
+      // Update main orders
       await db.query(
         `UPDATE orders 
          SET order_id = ?,
@@ -514,6 +534,7 @@ exports.sendQueueOrderToApi = async (req, res) => {
         [realOrderId, orderId]
       );
       
+      // Deduct provider balance
       await db.query(
         'UPDATE providers SET balance = balance - ? WHERE name = ?',
         [parseFloat(order.charge), order.provider || 'premium']
