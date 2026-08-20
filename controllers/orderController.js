@@ -450,56 +450,7 @@ async function refundUser(userId, amount, description) {
   }
 }
 
-// Update order status
-exports.updateOrderStatus = async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const { status, remains, start_count, refundedAmount } = req.body;
 
-    // Build update query dynamically
-    const updates = [];
-    const values = [];
-
-    if (status !== undefined) {
-      updates.push('status = ?');
-      values.push(status);
-    }
-    if (remains !== undefined) {
-      updates.push('remains = ?');
-      values.push(remains);
-    }
-    if (start_count !== undefined) {
-      updates.push('start_count = ?');
-      values.push(start_count);
-    }
-    if (refundedAmount !== undefined) {
-      updates.push('refunded_amount = ?');
-      values.push(refundedAmount);
-    }
-
-    // Always update updated_at
-    updates.push('updated_at = NOW()');
-
-    if (updates.length === 0) {
-      return res.status(400).json({ error: 'No fields to update' });
-    }
-
-    values.push(orderId);
-
-    await db.query(
-      `UPDATE orders SET ${updates.join(', ')} WHERE order_id = ?`,
-      values
-    );
-
-    res.json({ 
-      success: true, 
-      message: 'Order status updated successfully' 
-    });
-  } catch (error) {
-    console.error('Error updating order status:', error);
-    res.status(500).json({ error: 'Failed to update order status' });
-  }
-};
 
 // Get order statistics
 exports.getOrderStats = async (req, res) => {
