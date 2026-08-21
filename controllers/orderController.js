@@ -38,12 +38,11 @@ exports.getOrderById = async (req, res) => {
   }
 };
 
-// Create new order
+// ─── CREATE NEW ORDER (Single Function - Handles Normal + Queue) ───
 exports.createOrder = async (req, res) => {
   try {
     const { 
       userId, 
-      orderId, 
       serviceId, 
       serviceName, 
       provider, 
@@ -53,36 +52,174 @@ exports.createOrder = async (req, res) => {
       link, 
       start_count, 
       remains, 
-      status 
+      status,
+      apiParams 
     } = req.body;
 
-    // Check if order already exists
-    const [existing] = await db.query(
-      'SELECT id FROM orders WHERE order_id = ?',
-      [orderId]
-    );
+    // ─────────────────────────────────────────────
+    // STEP 1: Generate temporary order ID
+    // ─────────────────────────────────────────────
+    const tempOrderId = `TEMP_${Date.now()}_${String(userId).slice(0, 6)}`;
 
-    if (existing.length > 0) {
-      return res.status(400).json({ error: 'Order already exists' });
+    // ─────────────────────────────────────────────
+    // STEP 2: Build provider API parameters
+    // ─────────────────────────────────────────────
+    const apiParamsObj = apiParams || {
+      action: 'add',
+      service: serviceId,
+      link: link,
+      quantity: String(quantity)
+    };
+
+    // ─────────────────────────────────────────────
+    // STEP 3: Call Provider API
+    // ─────────────────────────────────────────────
+    const SMM_PROXY_URL = process.env.SMM_PROXY_URL || 'https://api.dzd-marketing.site/api/proxy';
+
+    let apiSuccess = false;
+    let realOrderId = null;
+    let apiError = null;
+    let isBalanceError = false;
+
+    try {
+      const response = await fetch(SMM_PROXY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: provider || 'premium',
+          ...apiParamsObj
+        })
+      });
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (jsonError) {
+        apiError = 'Invalid provider API response';
+        console.error('Provider returned invalid JSON:', jsonError.message);
+        return res.status(502).json({
+          success: false,
+          error: apiError
+        });
+      }
+
+      console.log('Provider API Response:', JSON.stringify(data));
+
+      // ─── SUCCESS ───
+      if (data && data.order) {
+        realOrderId = String(data.order);
+        apiSuccess = true;
+      }
+      // ─── ERROR ───
+      else if (data && data.error) {
+        apiError = String(data.error);
+        console.log(`Provider API Error: ${apiError}`);
+        
+        // 🔥 ONLY BALANCE ERROR GOES TO QUEUE
+        if (apiError.toLowerCase().includes('not enough funds on balance')) {
+          isBalanceError = true;
+        }
+      }
+      // ─── UNKNOWN ───
+      else {
+        apiError = 'Unknown provider API response';
+      }
+
+    } catch (error) {
+      apiError = error?.message || 'Provider API request failed';
+      console.error('Provider API request error:', error);
+      isBalanceError = false;
     }
 
-    await db.query(
-      `INSERT INTO orders (order_id, user_id, service_id, service_name, provider, quantity, charge, currency, link, start_count, remains, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [orderId, userId, serviceId, serviceName, provider, quantity, charge, currency, link, start_count, remains, status]
-    );
+    // ─────────────────────────────────────────────
+    // STEP 4: PROVIDER SUCCESS - Save as PENDING
+    // ─────────────────────────────────────────────
+    if (apiSuccess && realOrderId) {
+      await db.query(
+        `INSERT INTO orders (
+          order_id, user_id, service_id, service_name, provider,
+          quantity, charge, currency, link, start_count, remains, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          realOrderId,
+          userId,
+          serviceId,
+          serviceName,
+          provider || 'premium',
+          quantity,
+          charge,
+          currency || 'LKR',
+          link,
+          start_count ?? 0,
+          remains ?? quantity,
+          'pending'
+        ]
+      );
 
-    res.status(201).json({ 
-      success: true, 
-      message: 'Order created successfully',
-      orderId
+      return res.status(201).json({
+        success: true,
+        message: 'Order placed successfully',
+        orderId: realOrderId,
+        queue_order: false,
+        status: 'pending'
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // STEP 5: BALANCE ERROR - Save as QUEUE
+    // ─────────────────────────────────────────────
+    if (isBalanceError) {
+      console.log(`⚠️ Provider balance insufficient. Queueing order: ${tempOrderId}`);
+
+      await db.query(
+        `INSERT INTO orders (
+          order_id, user_id, service_id, service_name, provider,
+          quantity, charge, currency, link, start_count, remains, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          tempOrderId,
+          userId,
+          serviceId,
+          serviceName,
+          provider || 'premium',
+          quantity,
+          charge,
+          currency || 'LKR',
+          link,
+          start_count ?? 0,
+          remains ?? quantity,
+          'queue'
+        ]
+      );
+
+      // ❗ Don't expose provider balance error to user
+      return res.status(201).json({
+        success: true,
+        message: 'Order queued successfully',
+        orderId: tempOrderId,
+        queue_order: true,
+        status: 'queue'
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // STEP 6: OTHER ERROR - Return Error
+    // ─────────────────────────────────────────────
+    console.error('Provider order failed:', apiError);
+
+    return res.status(502).json({
+      success: false,
+      error: apiError || 'Provider order failed'
     });
+
   } catch (error) {
     console.error('Error creating order:', error);
-    res.status(500).json({ error: 'Failed to create order' });
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create order'
+    });
   }
 };
-
 // Update order status
 exports.updateOrderStatus = async (req, res) => {
   try {
