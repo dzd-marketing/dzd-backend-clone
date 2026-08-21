@@ -38,194 +38,51 @@ exports.getOrderById = async (req, res) => {
   }
 };
 
-// ─── CREATE NEW ORDER ─────────────────────────────────────────────
+// Create new order
 exports.createOrder = async (req, res) => {
   try {
-    const {
-      userId,
-      serviceId,
-      serviceName,
-      provider,
-      quantity,
-      charge,
-      currency,
-      link,
-      start_count,
-      remains,
-      apiParams
+    const { 
+      userId, 
+      orderId, 
+      serviceId, 
+      serviceName, 
+      provider, 
+      quantity, 
+      charge, 
+      currency, 
+      link, 
+      start_count, 
+      remains, 
+      status 
     } = req.body;
 
-    if (!userId || !serviceId || !quantity || !link) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required order details'
-      });
-    }
-
-    // Temporary ID for queued orders
-    const tempOrderId = `QUEUE_${Date.now()}_${String(userId).slice(0, 6)}`;
-
-    // Check duplicate temporary ID
+    // Check if order already exists
     const [existing] = await db.query(
       'SELECT id FROM orders WHERE order_id = ?',
-      [tempOrderId]
+      [orderId]
     );
 
     if (existing.length > 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Order already exists'
-      });
+      return res.status(400).json({ error: 'Order already exists' });
     }
 
-    // API parameters
-    const apiParamsObj = apiParams || {
-      action: 'add',
-      service: serviceId,
-      link,
-      quantity: String(quantity)
-    };
-
-    const SMM_PROXY_URL =
-      process.env.SMM_PROXY_URL ||
-      'https://api.dzd-marketing.site/api/proxy';
-
-    let finalOrderId = null;
-    let finalStatus = 'queue';
-    let apiError = null;
-
-    // ─── SEND ORDER TO PROVIDER ──────────────────────────────────
-    try {
-      const response = await fetch(SMM_PROXY_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          provider: provider || 'premium',
-          ...apiParamsObj
-        })
-      });
-
-      const data = await response.json();
-
-      console.log('Provider response:', data);
-
-      // Provider success
-      if (data?.order) {
-        finalOrderId =
-          typeof data.order === 'object'
-            ? String(data.order.id)
-            : String(data.order);
-
-        finalStatus = 'pending';
-      }
-
-      // Provider insufficient balance
-      else if (
-        data?.error &&
-        String(data.error).toLowerCase().includes('not enough funds')
-      ) {
-        console.log(
-          `Provider balance insufficient. Queueing order for user ${userId}`
-        );
-
-        apiError = data.error;
-
-        finalOrderId = tempOrderId;
-        finalStatus = 'queue';
-      }
-
-      // Other provider error
-      else if (data?.error) {
-        apiError = data.error;
-
-        return res.status(400).json({
-          success: false,
-          error: data.error
-        });
-      }
-
-      // Unknown response
-      else {
-        return res.status(502).json({
-          success: false,
-          error: 'Invalid response from provider'
-        });
-      }
-
-    } catch (apiErr) {
-      console.error('Provider API error:', apiErr);
-
-      // Network/provider temporarily unavailable
-      apiError = apiErr.message || 'Provider API unavailable';
-
-      finalOrderId = tempOrderId;
-      finalStatus = 'queue';
-    }
-
-    // ─── SAVE ORDER ──────────────────────────────────────────────
     await db.query(
-      `INSERT INTO orders (
-        order_id,
-        user_id,
-        service_id,
-        service_name,
-        provider,
-        quantity,
-        charge,
-        currency,
-        link,
-        start_count,
-        remains,
-        status
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        finalOrderId,
-        userId,
-        serviceId,
-        serviceName || `Service #${serviceId}`,
-        provider || 'premium',
-        quantity,
-        charge || 0,
-        currency || 'LKR',
-        link,
-        start_count || 0,
-        remains || quantity,
-        finalStatus
-      ]
+      `INSERT INTO orders (order_id, user_id, service_id, service_name, provider, quantity, charge, currency, link, start_count, remains, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [orderId, userId, serviceId, serviceName, provider, quantity, charge, currency, link, start_count, remains, status]
     );
 
-    // ─── SUCCESS RESPONSE ───────────────────────────────────────
-    if (finalStatus === 'pending') {
-      return res.status(201).json({
-        success: true,
-        queued: false,
-        message: 'Order placed successfully',
-        orderId: finalOrderId,
-        status: 'pending'
-      });
-    }
-
-    // ─── QUEUED RESPONSE ────────────────────────────────────────
-    return res.status(201).json({
-      success: true,
-      queued: true,
-      message: 'Order queued',
-      orderId: finalOrderId,
-      status: 'queue'
+    res.status(201).json({ 
+      success: true, 
+      message: 'Order created successfully',
+      orderId
     });
-
   } catch (error) {
-    console.error('Create order error:', error);
-
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to create order'
-    });
+    console.error('Error creating order:', error);
+    res.status(500).json({ error: 'Failed to create order' });
   }
 };
+
 // Update order status
 exports.updateOrderStatus = async (req, res) => {
   try {
