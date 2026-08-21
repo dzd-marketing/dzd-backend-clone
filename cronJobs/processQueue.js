@@ -3,12 +3,32 @@ const db = require('../config/db');
 
 // ─── CONFIG ─────────────────────────────────────────────────────────────────
 const PROVIDER_BALANCE_API = 'https://smmcheep.com/api/v2?key=e785f9e49139b1f3e6a5a1d98a09506c&action=balance';
+const EXCHANGE_API = 'https://v6.exchangerate-api.com/v6/be291495375008a1e603a49a/latest/USD';
 const SMM_PROXY_URL = process.env.SMM_PROXY_URL || 'https://api.dzd-marketing.site/api/proxy';
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
-// Get provider balance from external API
-async function getProviderBalance() {
+// Get USD to LKR exchange rate
+async function getExchangeRate() {
+  try {
+    const response = await fetch(EXCHANGE_API);
+    const data = await response.json();
+    
+    if (data.result === 'success' && data.conversion_rates?.LKR) {
+      const rate = parseFloat(data.conversion_rates.LKR);
+      console.log(`💱 Exchange rate: 1 USD = ${rate} LKR`);
+      return rate;
+    }
+    throw new Error('Failed to get exchange rate');
+  } catch (error) {
+    console.error('❌ Exchange rate error:', error.message);
+    // Return cached rate or default
+    return 330; // Default fallback
+  }
+}
+
+// Get provider balance from external API (in USD)
+async function getProviderBalanceUSD() {
   try {
     const response = await fetch(PROVIDER_BALANCE_API);
     const data = await response.json();
@@ -31,17 +51,21 @@ async function processQueueOrders() {
   console.log('🔄 [Cron] Processing queue orders...', new Date().toISOString());
   
   try {
-    // ─── STEP 1: Get provider balance from external API ──────────────
-    const providerBalanceUSD = await getProviderBalance();
+    // ─── STEP 1: Get exchange rate ──────────────────────────────────
+    const exchangeRate = await getExchangeRate();
+    
+    // ─── STEP 2: Get provider balance (USD) and convert to LKR ──────
+    const providerBalanceUSD = await getProviderBalanceUSD();
     
     if (providerBalanceUSD <= 0) {
       console.log('⚠️ Provider balance is zero or negative. Skipping queue processing.');
       return;
     }
     
-    console.log(`💰 Provider balance: $${providerBalanceUSD.toFixed(4)} USD`);
+    const providerBalanceLKR = providerBalanceUSD * exchangeRate;
+    console.log(`💰 Provider balance: $${providerBalanceUSD.toFixed(4)} USD = LKR ${providerBalanceLKR.toFixed(2)}`);
     
-    // ─── STEP 2: Get QUEUE orders ──────────────────────────────────
+    // ─── STEP 3: Get QUEUE orders ──────────────────────────────────
     const [queueOrders] = await db.query(
       `SELECT * FROM orders 
        WHERE status = 'queue' 
@@ -56,24 +80,23 @@ async function processQueueOrders() {
     
     console.log(`📦 Found ${queueOrders.length} queue orders to process`);
     
-    // ─── STEP 3: Process each order ──────────────────────────────────
+    // ─── STEP 4: Process each order ──────────────────────────────────
     let processedCount = 0;
-    let remainingBalance = providerBalanceUSD;
+    let remainingBalanceLKR = providerBalanceLKR;
+    let remainingBalanceUSD = providerBalanceUSD;
     
     for (const order of queueOrders) {
-      // ✅ Use order.order_id (not order.orderId)
       const orderId = order.order_id;
-      const orderCharge = parseFloat(order.charge || 0);
-      const providerCharge = parseFloat(order.provider_charge || 0);
+      const orderChargeLKR = parseFloat(order.charge || 0);
+      const orderChargeUSD = orderChargeLKR / exchangeRate;
       
       console.log(`\n📋 Order #${orderId}:`);
-      console.log(`   User Charge: LKR ${orderCharge.toFixed(2)}`);
-      console.log(`   Provider Charge: $${providerCharge.toFixed(4)} USD`);
-      console.log(`   Remaining Balance: $${remainingBalance.toFixed(4)} USD`);
+      console.log(`   Order Charge: LKR ${orderChargeLKR.toFixed(2)} ($${orderChargeUSD.toFixed(4)} USD)`);
+      console.log(`   Remaining Balance: LKR ${remainingBalanceLKR.toFixed(2)} ($${remainingBalanceUSD.toFixed(4)} USD)`);
       
-      // ─── STEP 4: Check if provider has enough balance ──────────────
-      if (remainingBalance < providerCharge) {
-        console.log(`⚠️ Insufficient balance! Need $${providerCharge.toFixed(4)}, have $${remainingBalance.toFixed(4)}`);
+      // ─── STEP 5: Check if provider has enough balance ──────────────
+      if (remainingBalanceLKR < orderChargeLKR) {
+        console.log(`⚠️ Insufficient balance! Need LKR ${orderChargeLKR.toFixed(2)}, have LKR ${remainingBalanceLKR.toFixed(2)}`);
         console.log(`⏳ Order ${orderId} - Will retry later`);
         
         // Update updated_at to track retry
@@ -88,7 +111,7 @@ async function processQueueOrders() {
         break;
       }
       
-      // ─── STEP 5: Build API params ──────────────────────────────────
+      // ─── STEP 6: Build API params ──────────────────────────────────
       const apiParams = {
         action: 'add',
         service: order.service_id,
@@ -99,7 +122,7 @@ async function processQueueOrders() {
       console.log(`📤 Sending order to API...`);
       
       try {
-        // ─── STEP 6: Call Provider API ──────────────────────────────
+        // ─── STEP 7: Call Provider API ──────────────────────────────
         const response = await fetch(SMM_PROXY_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -112,7 +135,7 @@ async function processQueueOrders() {
         const data = await response.json();
         console.log(`📥 API Response:`, JSON.stringify(data));
         
-        // ─── STEP 7: Handle API Response ─────────────────────────────
+        // ─── STEP 8: Handle API Response ─────────────────────────────
         if (data && data.order) {
           // ✅ SUCCESS - Update order with real ID
           const realOrderId = data.order;
@@ -121,18 +144,21 @@ async function processQueueOrders() {
             `UPDATE orders 
              SET order_id = ?,
                  status = 'pending',
+                 provider_charge = ?,
                  updated_at = NOW() 
              WHERE order_id = ? AND status = 'queue'`,
-            [realOrderId, orderId]
+            [realOrderId, orderChargeUSD.toFixed(4), orderId]
           );
           
-          // ✅ Deduct provider charge from remaining balance
-          remainingBalance -= providerCharge;
+          // ✅ Deduct order charge from remaining balance
+          remainingBalanceLKR -= orderChargeLKR;
+          remainingBalanceUSD -= orderChargeUSD;
           
           processedCount++;
           console.log(`✅ Order ${orderId} processed successfully!`);
           console.log(`   New Order ID: ${realOrderId}`);
-          console.log(`   Remaining Balance: $${remainingBalance.toFixed(4)} USD`);
+          console.log(`   Provider Charge: $${orderChargeUSD.toFixed(4)} USD`);
+          console.log(`   Remaining Balance: LKR ${remainingBalanceLKR.toFixed(2)} ($${remainingBalanceUSD.toFixed(4)} USD)`);
           
         } else if (data?.error) {
           // ❌ API ERROR
