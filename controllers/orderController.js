@@ -57,9 +57,15 @@ exports.createOrder = async (req, res) => {
     } = req.body;
 
     // ─────────────────────────────────────────────
-    // STEP 1: Generate temporary order ID
+    // STEP 1: Generate NUMERIC temporary order ID
     // ─────────────────────────────────────────────
-    const tempOrderId = `TEMP_${Date.now()}_${String(userId).slice(0, 6)}`;
+    // Use timestamp + random number (16 digits - fits in BIGINT)
+    const timestamp = Date.now(); // 13 digits
+    const random = Math.floor(Math.random() * 1000); // 3 digits
+    const tempOrderId = parseInt(`${timestamp}${random.toString().padStart(3, '0')}`);
+    // Example: 1787293042191001 (16 digits)
+    
+    console.log(`📦 Generated temp order ID: ${tempOrderId}`);
 
     // ─────────────────────────────────────────────
     // STEP 2: Build provider API parameters
@@ -107,7 +113,7 @@ exports.createOrder = async (req, res) => {
 
       // ─── SUCCESS ───
       if (data && data.order) {
-        realOrderId = String(data.order);
+        realOrderId = parseInt(data.order); // ✅ Convert to integer
         apiSuccess = true;
       }
       // ─── ERROR ───
@@ -141,7 +147,7 @@ exports.createOrder = async (req, res) => {
           quantity, charge, currency, link, start_count, remains, status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          realOrderId,
+          realOrderId,  // ✅ Integer
           userId,
           serviceId,
           serviceName,
@@ -177,7 +183,7 @@ exports.createOrder = async (req, res) => {
           quantity, charge, currency, link, start_count, remains, status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          tempOrderId,
+          tempOrderId,  // ✅ Integer
           userId,
           serviceId,
           serviceName,
