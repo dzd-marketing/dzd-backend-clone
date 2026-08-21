@@ -38,7 +38,7 @@ exports.getOrderById = async (req, res) => {
   }
 };
 
-// ─── CREATE NEW ORDER ───
+// ─── CREATE NEW ORDER ─────────────────────────────────────────────
 exports.createOrder = async (req, res) => {
   try {
     const {
@@ -52,44 +52,50 @@ exports.createOrder = async (req, res) => {
       link,
       start_count,
       remains,
-      status,
       apiParams
     } = req.body;
 
-    // ─────────────────────────────────────────────
-    // STEP 1: Generate temporary order ID
-    // ─────────────────────────────────────────────
+    if (!userId || !serviceId || !quantity || !link) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required order details'
+      });
+    }
 
-    const tempOrderId = `TEMP_${Date.now()}_${String(userId).slice(0, 6)}`;
+    // Temporary ID for queued orders
+    const tempOrderId = `QUEUE_${Date.now()}_${String(userId).slice(0, 6)}`;
 
+    // Check duplicate temporary ID
+    const [existing] = await db.query(
+      'SELECT id FROM orders WHERE order_id = ?',
+      [tempOrderId]
+    );
 
-    // ─────────────────────────────────────────────
-    // STEP 2: Build provider API parameters
-    // ─────────────────────────────────────────────
+    if (existing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Order already exists'
+      });
+    }
 
+    // API parameters
     const apiParamsObj = apiParams || {
       action: 'add',
       service: serviceId,
-      link: link,
+      link,
       quantity: String(quantity)
     };
-
-
-    // ─────────────────────────────────────────────
-    // STEP 3: Provider API
-    // ─────────────────────────────────────────────
 
     const SMM_PROXY_URL =
       process.env.SMM_PROXY_URL ||
       'https://api.dzd-marketing.site/api/proxy';
 
-    let apiSuccess = false;
-    let realOrderId = null;
+    let finalOrderId = null;
+    let finalStatus = 'queue';
     let apiError = null;
-    let isBalanceError = false;
 
+    // ─── SEND ORDER TO PROVIDER ──────────────────────────────────
     try {
-
       const response = await fetch(SMM_PROXY_URL, {
         method: 'POST',
         headers: {
@@ -101,235 +107,122 @@ exports.createOrder = async (req, res) => {
         })
       });
 
+      const data = await response.json();
 
-      // ─────────────────────────────────────────
-      // Try to read JSON response
-      // ─────────────────────────────────────────
+      console.log('Provider response:', data);
 
-      let data;
+      // Provider success
+      if (data?.order) {
+        finalOrderId =
+          typeof data.order === 'object'
+            ? String(data.order.id)
+            : String(data.order);
 
-      try {
-        data = await response.json();
-      } catch (jsonError) {
+        finalStatus = 'pending';
+      }
 
-        apiError = 'Invalid provider API response';
-
-        console.error(
-          'Provider returned invalid JSON:',
-          jsonError.message
+      // Provider insufficient balance
+      else if (
+        data?.error &&
+        String(data.error).toLowerCase().includes('not enough funds')
+      ) {
+        console.log(
+          `Provider balance insufficient. Queueing order for user ${userId}`
         );
 
-        return res.status(502).json({
+        apiError = data.error;
+
+        finalOrderId = tempOrderId;
+        finalStatus = 'queue';
+      }
+
+      // Other provider error
+      else if (data?.error) {
+        apiError = data.error;
+
+        return res.status(400).json({
           success: false,
-          error: apiError
+          error: data.error
         });
       }
 
-
-      console.log(
-        'Provider API Response:',
-        JSON.stringify(data)
-      );
-
-
-      // ─────────────────────────────────────────
-      // STEP 4: SUCCESS
-      // ─────────────────────────────────────────
-
-      if (data && data.order) {
-
-        realOrderId = String(data.order);
-        apiSuccess = true;
-
-      }
-
-
-      // ─────────────────────────────────────────
-      // STEP 5: ERROR
-      // ─────────────────────────────────────────
-
-      else if (data && data.error) {
-
-        apiError = String(data.error);
-
-        console.log(
-          `Provider API Error: ${apiError}`
-        );
-
-
-        // 🔥 ONLY BALANCE ERROR GOES TO QUEUE
-        if (
-          apiError
-            .toLowerCase()
-            .includes('not enough funds on balance')
-        ) {
-          isBalanceError = true;
-        }
-
-      }
-
-
-      // ─────────────────────────────────────────
-      // STEP 6: UNKNOWN RESPONSE
-      // ─────────────────────────────────────────
-
+      // Unknown response
       else {
-
-        apiError = 'Unknown provider API response';
-
+        return res.status(502).json({
+          success: false,
+          error: 'Invalid response from provider'
+        });
       }
 
+    } catch (apiErr) {
+      console.error('Provider API error:', apiErr);
 
-    } catch (error) {
+      // Network/provider temporarily unavailable
+      apiError = apiErr.message || 'Provider API unavailable';
 
-      apiError =
-        error?.message ||
-        'Provider API request failed';
-
-      console.error(
-        'Provider API request error:',
-        error
-      );
-
-      // Network/API connection failure
-      // is NOT automatically considered balance error.
-      isBalanceError = false;
+      finalOrderId = tempOrderId;
+      finalStatus = 'queue';
     }
 
+    // ─── SAVE ORDER ──────────────────────────────────────────────
+    await db.query(
+      `INSERT INTO orders (
+        order_id,
+        user_id,
+        service_id,
+        service_name,
+        provider,
+        quantity,
+        charge,
+        currency,
+        link,
+        start_count,
+        remains,
+        status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        finalOrderId,
+        userId,
+        serviceId,
+        serviceName || `Service #${serviceId}`,
+        provider || 'premium',
+        quantity,
+        charge || 0,
+        currency || 'LKR',
+        link,
+        start_count || 0,
+        remains || quantity,
+        finalStatus
+      ]
+    );
 
-    // ─────────────────────────────────────────────
-    // STEP 7: PROVIDER SUCCESS
-    // ─────────────────────────────────────────────
-
-    if (apiSuccess && realOrderId) {
-
-      await db.query(
-        `INSERT INTO orders (
-          order_id,
-          user_id,
-          service_id,
-          service_name,
-          provider,
-          quantity,
-          charge,
-          currency,
-          link,
-          start_count,
-          remains,
-          status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          realOrderId,
-          userId,
-          serviceId,
-          serviceName,
-          provider || 'premium',
-          quantity,
-          charge,
-          currency || 'LKR',
-          link,
-          start_count ?? 0,
-          remains ?? quantity,
-          'pending'
-        ]
-      );
-
-
+    // ─── SUCCESS RESPONSE ───────────────────────────────────────
+    if (finalStatus === 'pending') {
       return res.status(201).json({
         success: true,
+        queued: false,
         message: 'Order placed successfully',
-        orderId: realOrderId,
-        queue_order: false,
+        orderId: finalOrderId,
         status: 'pending'
       });
     }
 
-
-    // ─────────────────────────────────────────────
-    // STEP 8: PROVIDER BALANCE EMPTY
-    // ─────────────────────────────────────────────
-    //
-    // ONLY this error gets queue status.
-    //
-
-    if (isBalanceError) {
-
-      console.log(
-        `⚠️ Provider balance insufficient. Queueing order: ${tempOrderId}`
-      );
-
-
-      await db.query(
-        `INSERT INTO orders (
-          order_id,
-          user_id,
-          service_id,
-          service_name,
-          provider,
-          quantity,
-          charge,
-          currency,
-          link,
-          start_count,
-          remains,
-          status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          tempOrderId,
-          userId,
-          serviceId,
-          serviceName,
-          provider || 'premium',
-          quantity,
-          charge,
-          currency || 'LKR',
-          link,
-          start_count ?? 0,
-          remains ?? quantity,
-          'queue'
-        ]
-      );
-
-
-      // ❗ Don't expose provider balance error to user
-      return res.status(201).json({
-        success: true,
-        message: 'Order queued successfully',
-        orderId: tempOrderId,
-        queue_order: true,
-        status: 'queue'
-      });
-    }
-
-
-    // ─────────────────────────────────────────────
-    // STEP 9: OTHER PROVIDER ERROR
-    // ─────────────────────────────────────────────
-
-    console.error(
-      'Provider order failed:',
-      apiError
-    );
-
-
-    return res.status(502).json({
-      success: false,
-      error: apiError || 'Provider order failed'
+    // ─── QUEUED RESPONSE ────────────────────────────────────────
+    return res.status(201).json({
+      success: true,
+      queued: true,
+      message: 'Order queued',
+      orderId: finalOrderId,
+      status: 'queue'
     });
 
-
   } catch (error) {
-
-    console.error(
-      'Error creating order:',
-      error
-    );
+    console.error('Create order error:', error);
 
     return res.status(500).json({
       success: false,
-      error: error.message || 'Failed to create order'
+      error: 'Failed to create order'
     });
   }
 };
