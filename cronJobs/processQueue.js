@@ -61,15 +61,34 @@ async function processQueueOrders() {
     let remainingBalance = providerBalanceUSD;
     
     for (const order of queueOrders) {
-      // Order charge is in LKR - need to check if we have enough USD
-      // We need the exchange rate to convert LKR to USD
-      // Since we don't have exchange rate, we check if balance > 0 and try to send
-      // The API will reject if balance is insufficient
+      // ✅ Use order.order_id (not order.orderId)
+      const orderId = order.order_id;
+      const orderCharge = parseFloat(order.charge || 0);
+      const providerCharge = parseFloat(order.provider_charge || 0);
       
-      console.log(`\n📋 Order #${order.orderId}: LKR ${parseFloat(order.charge || 0).toFixed(2)}`);
-      console.log(`💰 Remaining balance: $${remainingBalance.toFixed(4)} USD`);
+      console.log(`\n📋 Order #${orderId}:`);
+      console.log(`   User Charge: LKR ${orderCharge.toFixed(2)}`);
+      console.log(`   Provider Charge: $${providerCharge.toFixed(4)} USD`);
+      console.log(`   Remaining Balance: $${remainingBalance.toFixed(4)} USD`);
       
-      // ─── STEP 4: Build API params ──────────────────────────────────
+      // ─── STEP 4: Check if provider has enough balance ──────────────
+      if (remainingBalance < providerCharge) {
+        console.log(`⚠️ Insufficient balance! Need $${providerCharge.toFixed(4)}, have $${remainingBalance.toFixed(4)}`);
+        console.log(`⏳ Order ${orderId} - Will retry later`);
+        
+        // Update updated_at to track retry
+        await db.query(
+          `UPDATE orders 
+           SET updated_at = NOW() 
+           WHERE order_id = ? AND status = 'queue'`,
+          [orderId]
+        );
+        
+        // Stop processing more orders (sorted by oldest first)
+        break;
+      }
+      
+      // ─── STEP 5: Build API params ──────────────────────────────────
       const apiParams = {
         action: 'add',
         service: order.service_id,
@@ -80,7 +99,7 @@ async function processQueueOrders() {
       console.log(`📤 Sending order to API...`);
       
       try {
-        // ─── STEP 5: Call Provider API ──────────────────────────────
+        // ─── STEP 6: Call Provider API ──────────────────────────────
         const response = await fetch(SMM_PROXY_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -93,7 +112,7 @@ async function processQueueOrders() {
         const data = await response.json();
         console.log(`📥 API Response:`, JSON.stringify(data));
         
-        // ─── STEP 6: Handle API Response ─────────────────────────────
+        // ─── STEP 7: Handle API Response ─────────────────────────────
         if (data && data.order) {
           // ✅ SUCCESS - Update order with real ID
           const realOrderId = data.order;
@@ -104,14 +123,16 @@ async function processQueueOrders() {
                  status = 'pending',
                  updated_at = NOW() 
              WHERE order_id = ? AND status = 'queue'`,
-            [realOrderId, order.orderId]
+            [realOrderId, orderId]
           );
           
-          processedCount++;
-          console.log(`✅ Order ${order.orderId} processed. New ID: ${realOrderId}`);
+          // ✅ Deduct provider charge from remaining balance
+          remainingBalance -= providerCharge;
           
-          // Note: Provider balance is deducted automatically by the provider
-          // We don't need to update it manually
+          processedCount++;
+          console.log(`✅ Order ${orderId} processed successfully!`);
+          console.log(`   New Order ID: ${realOrderId}`);
+          console.log(`   Remaining Balance: $${remainingBalance.toFixed(4)} USD`);
           
         } else if (data?.error) {
           // ❌ API ERROR
@@ -122,10 +143,10 @@ async function processQueueOrders() {
             await db.query(
               `UPDATE orders 
                SET updated_at = NOW() 
-               WHERE order_id = ?`,
-              [order.orderId]
+               WHERE order_id = ? AND status = 'queue'`,
+              [orderId]
             );
-            console.log(`⏳ Order ${order.orderId} - Insufficient balance, will retry later`);
+            console.log(`⏳ Order ${orderId} - Insufficient balance, will retry later`);
             
             // Stop processing - no more balance
             break;
@@ -136,10 +157,10 @@ async function processQueueOrders() {
               `UPDATE orders 
                SET status = 'failed',
                    updated_at = NOW() 
-               WHERE order_id = ?`,
-              [order.orderId]
+               WHERE order_id = ? AND status = 'queue'`,
+              [orderId]
             );
-            console.log(`❌ Order ${order.orderId} failed: ${data.error}`);
+            console.log(`❌ Order ${orderId} failed: ${data.error}`);
           }
           
         } else {
@@ -147,20 +168,20 @@ async function processQueueOrders() {
           await db.query(
             `UPDATE orders 
              SET updated_at = NOW() 
-             WHERE order_id = ?`,
-            [order.orderId]
+             WHERE order_id = ? AND status = 'queue'`,
+            [orderId]
           );
-          console.log(`⚠️ Order ${order.orderId} - Unknown API response`);
+          console.log(`⚠️ Order ${orderId} - Unknown API response`);
         }
         
       } catch (error) {
-        console.error(`❌ Error processing order ${order.orderId}:`, error.message);
+        console.error(`❌ Error processing order ${orderId}:`, error.message);
         // Keep as QUEUE, will retry later
         await db.query(
           `UPDATE orders 
            SET updated_at = NOW() 
-           WHERE order_id = ?`,
-          [order.orderId]
+           WHERE order_id = ? AND status = 'queue'`,
+          [orderId]
         );
       }
     }
