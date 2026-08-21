@@ -106,6 +106,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+if (process.env.NODE_ENV !== 'test') {
+  try {
+    require('./cronJobs/processQueue');
+    console.log('🔄 Queue processor cron job loaded successfully');
+    console.log('⏰ Will run every 10 minutes');
+  } catch (error) {
+    console.error('❌ Failed to load queue processor cron job:', error.message);
+  }
+}
+
 // ─── START SERVER ────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Server running on port ${PORT} on all interfaces`);
