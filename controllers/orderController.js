@@ -1,5 +1,7 @@
 const db = require('../config/db');
 
+const EXCHANGE_API = 'https://v6.exchangerate-api.com/v6/be291495375008a1e603a49a/latest/USD';
+
 // ─── CANCEL QUEUE ORDER WITH REFUND ──────────────────────────────────────
 exports.cancelQueueOrder = async (req, res) => {
   const connection = await db.getConnection();
