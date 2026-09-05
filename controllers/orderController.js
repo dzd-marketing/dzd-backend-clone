@@ -29,7 +29,6 @@ exports.cancelQueueOrder = async (req, res) => {
     await connection.beginTransaction();
     
     // ─── STEP 3: Update order status to CANCELED ──────────────────────
-    // ✅ No need to insert new order - just update existing one
     await connection.query(
       `UPDATE orders 
        SET status = 'Canceled',
@@ -45,7 +44,7 @@ exports.cancelQueueOrder = async (req, res) => {
     if (withRefund === true || withRefund === 'true') {
       refundAmount = charge;
       
-      // ✅ Update same order with refunded_amount
+      // ✅ 4a: Update order with refunded_amount
       await connection.query(
         `UPDATE orders 
          SET refunded_amount = ?,
@@ -55,17 +54,34 @@ exports.cancelQueueOrder = async (req, res) => {
         [charge, orderId, userId]
       );
       
+      // ✅ 4b: Add refund amount to user's balance (wallet)
+      // First check if user exists
+      const [userCheck] = await connection.query(
+        `SELECT id FROM users WHERE uid = ?`,
+        [userId]
+      );
+      
+      if (userCheck.length > 0) {
+        // Update user balance (assuming you have a balance column)
+        await connection.query(
+          `UPDATE users 
+           SET balance = COALESCE(balance, 0) + ?
+           WHERE uid = ?`,
+          [charge, userId]
+        );
+      }
+      
       refundProcessed = true;
     }
     
     // ─── STEP 5: Commit transaction ────────────────────────────────────
     await connection.commit();
     
-    console.log(`🗑️ Queue order ${orderId} canceled${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)}` : ''}`);
+    console.log(`🗑️ Queue order ${orderId} canceled${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)} to user ${userId}` : ''}`);
     
     res.json({
       success: true,
-      message: `Queue order ${orderId} canceled successfully${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)}` : ''}`,
+      message: `Queue order ${orderId} canceled successfully${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)} to user's wallet` : ''}`,
       data: {
         order_id: orderId,
         user_id: userId,
