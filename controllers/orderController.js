@@ -2,6 +2,23 @@ const db = require('../config/db');
 const PROVIDER_BALANCE_API = 'https://smmcheep.com/api/v2?key=e785f9e49139b1f3e6a5a1d98a09506c&action=balance';
 const EXCHANGE_API = 'https://v6.exchangerate-api.com/v6/be291495375008a1e603a49a/latest/USD';
 
+async function getProviderBalanceUSD() {
+  try {
+    const response = await fetch(PROVIDER_BALANCE_API);
+    const data = await response.json();
+    
+    if (data && data.balance) {
+      const balance = parseFloat(data.balance) || 0;
+      console.log(`💰 Provider balance: $${balance.toFixed(4)} USD`);
+      return balance;
+    }
+    throw new Error('Failed to get provider balance');
+  } catch (error) {
+    console.error('❌ Provider balance error:', error.message);
+    return 0;
+  }
+}
+
 // Get USD to LKR exchange rate
 async function getExchangeRate() {
   try {
