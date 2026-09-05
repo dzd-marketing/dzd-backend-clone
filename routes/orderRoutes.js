@@ -12,6 +12,9 @@ router.get('/recent/:userId', orderController.getRecentOrders);
 router.get('/admin/api-orders', orderController.getApiOrders);
 router.get('/admin/api-orders/stats', orderController.getApiOrderStats);
 
+//karima routes
+router.post('/queue/run', orderController.runQueueManually);
+
 // New routes with refund info
 router.get('/user/:userId/with-refunds', orderController.getUserOrdersWithRefunds);
 router.get('/user/:userId/total-refunded', orderController.getUserTotalRefunded);
