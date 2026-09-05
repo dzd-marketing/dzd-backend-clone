@@ -150,7 +150,7 @@ exports.runQueueManually = async (req, res) => {
     // ─── STEP 1: Get exchange rate ──────────────────────────────────
     const exchangeRate = await getExchangeRate();
     
-    // ─── STEP 2: Get provider balance (USD) and convert to LKR ──────
+    // ─── STEP 2: Get provider balance (USD) ──────────────────────
     const providerBalanceUSD = await getProviderBalanceUSD();
     
     if (providerBalanceUSD <= 0) {
@@ -163,7 +163,7 @@ exports.runQueueManually = async (req, res) => {
     
     const providerBalanceLKR = providerBalanceUSD * exchangeRate;
     
-    // ─── STEP 3: Get QUEUE orders ──────────────────────────────────
+    // ─── STEP 3: Get QUEUE orders from orders table ──────────────
     const [queueOrders] = await db.query(
       `SELECT * FROM orders 
        WHERE status = 'queue' 
@@ -182,7 +182,6 @@ exports.runQueueManually = async (req, res) => {
     
     console.log(`📦 Found ${queueOrders.length} queue orders to process`);
     
-    // ─── STEP 4: Process each order ──────────────────────────────────
     let processedCount = 0;
     let failedCount = 0;
     let remainingBalanceLKR = providerBalanceLKR;
@@ -198,10 +197,18 @@ exports.runQueueManually = async (req, res) => {
       console.log(`   Order Charge: LKR ${orderChargeLKR.toFixed(2)} ($${orderChargeUSD.toFixed(4)} USD)`);
       console.log(`   Remaining Balance: LKR ${remainingBalanceLKR.toFixed(2)} ($${remainingBalanceUSD.toFixed(4)} USD)`);
       
-      // ─── STEP 5: Check if provider has enough balance ──────────────
+      // ─── STEP 4: Check if provider has enough balance ──────────
       if (remainingBalanceLKR < orderChargeLKR) {
         console.log(`⚠️ Insufficient balance! Need LKR ${orderChargeLKR.toFixed(2)}, have LKR ${remainingBalanceLKR.toFixed(2)}`);
         console.log(`⏳ Order ${orderId} - Will retry later`);
+        
+        // Update updated_at to track retry
+        await db.query(
+          `UPDATE orders 
+           SET updated_at = NOW() 
+           WHERE order_id = ? AND status = 'queue'`,
+          [orderId]
+        );
         
         results.push({
           order_id: orderId,
@@ -209,10 +216,11 @@ exports.runQueueManually = async (req, res) => {
           reason: 'Insufficient provider balance'
         });
         
+        // Stop processing more orders (sorted by oldest first)
         break;
       }
       
-      // ─── STEP 6: Build API params ──────────────────────────────────
+      // ─── STEP 5: Build API params ──────────────────────────────────
       const apiParams = {
         action: 'add',
         service: order.service_id,
@@ -223,7 +231,7 @@ exports.runQueueManually = async (req, res) => {
       console.log(`📤 Sending order to API...`);
       
       try {
-        // ─── STEP 7: Call Provider API ──────────────────────────────
+        // ─── STEP 6: Call Provider API ──────────────────────────────
         const response = await fetch('https://api.dzd-marketing.site/api/proxy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -236,33 +244,51 @@ exports.runQueueManually = async (req, res) => {
         const data = await response.json();
         console.log(`📥 API Response:`, JSON.stringify(data));
         
-        // ─── STEP 8: Handle API Response ─────────────────────────────
+        // ─── STEP 7: Handle API Response ─────────────────────────────
         if (data && data.order) {
-          // ✅ SUCCESS - Move to orders table
+          // ✅ SUCCESS - UPDATE the existing order (NOT INSERT!)
           const realOrderId = data.order;
           
-          // Insert into orders table
-          await db.query(
-            `INSERT INTO orders 
-             (order_id, user_id, service_id, service_name, provider, quantity, charge, provider_charge, link, status, remains, currency, is_api_order) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?)`,
-            [realOrderId, order.user_id, order.service_id, order.service_name, order.provider, 
-             order.quantity, order.charge, order.provider_charge, order.link, order.quantity, order.currency, 1]
+          // ✅ Check if order_id already exists (prevent duplicate)
+          const [existing] = await db.query(
+            `SELECT order_id FROM orders WHERE order_id = ?`,
+            [realOrderId]
           );
           
-          // Delete from queue
-          await db.query(
-            `DELETE FROM order_queue WHERE order_id = ?`,
-            [orderId]
-          );
+          if (existing.length > 0) {
+            // If order_id already exists, use a different approach
+            console.log(`⚠️ Order ID ${realOrderId} already exists! Using original ID.`);
+            
+            // Just update status to pending without changing order_id
+            await db.query(
+              `UPDATE orders 
+               SET status = 'pending',
+                   provider_charge = ?,
+                   updated_at = NOW() 
+               WHERE order_id = ? AND status = 'queue'`,
+              [orderChargeUSD.toFixed(4), orderId]
+            );
+          } else {
+            // Normal flow - update with real order ID
+            await db.query(
+              `UPDATE orders 
+               SET order_id = ?,
+                   status = 'pending',
+                   provider_charge = ?,
+                   updated_at = NOW() 
+               WHERE order_id = ? AND status = 'queue'`,
+              [realOrderId, orderChargeUSD.toFixed(4), orderId]
+            );
+          }
           
-          // Deduct order charge from remaining balance
+          // ✅ Deduct order charge from remaining balance
           remainingBalanceLKR -= orderChargeLKR;
           remainingBalanceUSD -= orderChargeUSD;
           
           processedCount++;
           console.log(`✅ Order ${orderId} processed successfully!`);
           console.log(`   New Order ID: ${realOrderId}`);
+          console.log(`   Provider Charge: $${orderChargeUSD.toFixed(4)} USD`);
           
           results.push({
             order_id: orderId,
@@ -277,34 +303,76 @@ exports.runQueueManually = async (req, res) => {
           const errorMsg = data.error.toLowerCase();
           
           if (errorMsg.includes('not enough funds') || errorMsg.includes('balance')) {
-            // Balance error - keep in queue
+            // Balance error - keep as QUEUE, will retry later
+            await db.query(
+              `UPDATE orders 
+               SET updated_at = NOW() 
+               WHERE order_id = ? AND status = 'queue'`,
+              [orderId]
+            );
+            console.log(`⏳ Order ${orderId} - Insufficient balance, will retry later`);
+            
             results.push({
               order_id: orderId,
               status: 'pending',
-              reason: 'Provider balance insufficient - will retry later'
+              reason: 'Provider balance insufficient'
             });
             
             // Stop processing - no more balance
             break;
             
+          } else {
+            // Other error - mark as FAILED
+            await db.query(
+              `UPDATE orders 
+               SET status = 'failed',
+                   updated_at = NOW() 
+               WHERE order_id = ? AND status = 'queue'`,
+              [orderId]
+            );
+            console.log(`❌ Order ${orderId} failed: ${data.error}`);
+            
+            results.push({
+              order_id: orderId,
+              status: 'failed',
+              reason: data.error
+            });
+            failedCount++;
           }
           
         } else {
-          // Unknown response - keep in queue
+          // Unknown response - keep as QUEUE
+          await db.query(
+            `UPDATE orders 
+             SET updated_at = NOW() 
+             WHERE order_id = ? AND status = 'queue'`,
+            [orderId]
+          );
+          console.log(`⚠️ Order ${orderId} - Unknown API response`);
+          
           results.push({
             order_id: orderId,
             status: 'pending',
-            reason: 'Unknown API response - will retry'
+            reason: 'Unknown API response'
           });
         }
         
       } catch (error) {
         console.error(`❌ Error processing order ${orderId}:`, error.message);
+        // Keep as QUEUE, will retry later
+        await db.query(
+          `UPDATE orders 
+           SET updated_at = NOW() 
+           WHERE order_id = ? AND status = 'queue'`,
+          [orderId]
+        );
+        
         results.push({
           order_id: orderId,
           status: 'error',
           reason: error.message
         });
+        failedCount++;
       }
     }
     
