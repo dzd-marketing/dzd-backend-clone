@@ -1,42 +1,5 @@
 const db = require('../config/db');
-const PROVIDER_BALANCE_API = 'https://smmcheep.com/api/v2?key=e785f9e49139b1f3e6a5a1d98a09506c&action=balance';
-const EXCHANGE_API = 'https://v6.exchangerate-api.com/v6/be291495375008a1e603a49a/latest/USD';
 
-async function getProviderBalanceUSD() {
-  try {
-    const response = await fetch(PROVIDER_BALANCE_API);
-    const data = await response.json();
-    
-    if (data && data.balance) {
-      const balance = parseFloat(data.balance) || 0;
-      console.log(`💰 Provider balance: $${balance.toFixed(4)} USD`);
-      return balance;
-    }
-    throw new Error('Failed to get provider balance');
-  } catch (error) {
-    console.error('❌ Provider balance error:', error.message);
-    return 0;
-  }
-}
-
-// Get USD to LKR exchange rate
-async function getExchangeRate() {
-  try {
-    const response = await fetch(EXCHANGE_API);
-    const data = await response.json();
-    
-    if (data.result === 'success' && data.conversion_rates?.LKR) {
-      const rate = parseFloat(data.conversion_rates.LKR);
-      console.log(`💱 Exchange rate: 1 USD = ${rate} LKR`);
-      return rate;
-    }
-    throw new Error('Failed to get exchange rate');
-  } catch (error) {
-    console.error('❌ Exchange rate error:', error.message);
-    // Return cached rate or default
-    return 330; // Default fallback
-  }
-}
 
 // ─── CANCEL QUEUE ORDER WITH REFUND ──────────────────────────────────────
 exports.cancelQueueOrder = async (req, res) => {
@@ -67,6 +30,7 @@ exports.cancelQueueOrder = async (req, res) => {
     await connection.beginTransaction();
     
     // ─── STEP 3: Update order status to CANCELED ──────────────────────
+    // ✅ No need to insert new order - just update existing one
     await connection.query(
       `UPDATE orders 
        SET status = 'Canceled',
@@ -82,7 +46,7 @@ exports.cancelQueueOrder = async (req, res) => {
     if (withRefund === true || withRefund === 'true') {
       refundAmount = charge;
       
-      // ✅ 4a: Update order with refunded_amount
+      // ✅ Update same order with refunded_amount
       await connection.query(
         `UPDATE orders 
          SET refunded_amount = ?,
@@ -92,34 +56,17 @@ exports.cancelQueueOrder = async (req, res) => {
         [charge, orderId, userId]
       );
       
-      // ✅ 4b: Add refund amount to user's balance (wallet)
-      // First check if user exists
-      const [userCheck] = await connection.query(
-        `SELECT id FROM users WHERE uid = ?`,
-        [userId]
-      );
-      
-      if (userCheck.length > 0) {
-        // Update user balance (assuming you have a balance column)
-        await connection.query(
-          `UPDATE users 
-           SET balance = COALESCE(balance, 0) + ?
-           WHERE uid = ?`,
-          [charge, userId]
-        );
-      }
-      
       refundProcessed = true;
     }
     
     // ─── STEP 5: Commit transaction ────────────────────────────────────
     await connection.commit();
     
-    console.log(`🗑️ Queue order ${orderId} canceled${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)} to user ${userId}` : ''}`);
+    console.log(`🗑️ Queue order ${orderId} canceled${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)}` : ''}`);
     
     res.json({
       success: true,
-      message: `Queue order ${orderId} canceled successfully${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)} to user's wallet` : ''}`,
+      message: `Queue order ${orderId} canceled successfully${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)}` : ''}`,
       data: {
         order_id: orderId,
         user_id: userId,
