@@ -14,7 +14,7 @@ router.get('/admin/api-orders/stats', orderController.getApiOrderStats);
 
 //karima routes
 router.post('/queue/run', orderController.runQueueManually);
-router.delete('/queue/:orderId', orderController.deleteQueueOrder);
+router.delete('/queue/:orderId', orderController.cancelQueueOrder);
 
 // New routes with refund info
 router.get('/user/:userId/with-refunds', orderController.getUserOrdersWithRefunds);
