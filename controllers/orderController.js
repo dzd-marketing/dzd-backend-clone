@@ -2,6 +2,25 @@ const db = require('../config/db');
 
 const EXCHANGE_API = 'https://v6.exchangerate-api.com/v6/be291495375008a1e603a49a/latest/USD';
 
+// Get USD to LKR exchange rate
+async function getExchangeRate() {
+  try {
+    const response = await fetch(EXCHANGE_API);
+    const data = await response.json();
+    
+    if (data.result === 'success' && data.conversion_rates?.LKR) {
+      const rate = parseFloat(data.conversion_rates.LKR);
+      console.log(`💱 Exchange rate: 1 USD = ${rate} LKR`);
+      return rate;
+    }
+    throw new Error('Failed to get exchange rate');
+  } catch (error) {
+    console.error('❌ Exchange rate error:', error.message);
+    // Return cached rate or default
+    return 330; // Default fallback
+  }
+}
+
 // ─── CANCEL QUEUE ORDER WITH REFUND ──────────────────────────────────────
 exports.cancelQueueOrder = async (req, res) => {
   const connection = await db.getConnection();
