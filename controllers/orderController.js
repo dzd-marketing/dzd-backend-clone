@@ -8,9 +8,9 @@ exports.cancelQueueOrder = async (req, res) => {
     const { orderId } = req.params;
     const { withRefund = true } = req.query; // Default: refund enabled
     
-    // ─── STEP 1: Get order from queue ──────────────────────────────────
+    // ─── STEP 1: Get order from orders table (status = 'queue') ──────
     const [queueOrders] = await connection.query(
-      `SELECT * FROM order_queue WHERE order_id = ?`,
+      `SELECT * FROM orders WHERE order_id = ? AND status = 'queue'`,
       [orderId]
     );
     
@@ -28,31 +28,14 @@ exports.cancelQueueOrder = async (req, res) => {
     // ─── STEP 2: Start transaction ──────────────────────────────────────
     await connection.beginTransaction();
     
-    // ─── STEP 3: Insert into orders table as CANCELED ──────────────────
-    const cancelOrderId = 'C' + Date.now().toString() + Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-    
+    // ─── STEP 3: Update order status to CANCELED ──────────────────────
+    // ✅ No need to insert new order - just update existing one
     await connection.query(
-      `INSERT INTO orders (
-        order_id, user_id, service_id, service_name, provider, 
-        quantity, charge, provider_charge, currency, link, 
-        start_count, remains, status, is_api_order, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-      [
-        cancelOrderId, 
-        userId, 
-        queueOrder.service_id, 
-        queueOrder.service_name, 
-        queueOrder.provider || 'premium',
-        queueOrder.quantity, 
-        charge, 
-        queueOrder.provider_charge || 0,
-        queueOrder.currency || 'LKR',
-        queueOrder.link || '',
-        0, // start_count
-        0, // remains
-        'Canceled', 
-        0 // is_api_order
-      ]
+      `UPDATE orders 
+       SET status = 'Canceled',
+           updated_at = NOW()
+       WHERE order_id = ? AND status = 'queue'`,
+      [orderId]
     );
     
     // ─── STEP 4: If refund enabled, process refund ────────────────────
@@ -62,49 +45,34 @@ exports.cancelQueueOrder = async (req, res) => {
     if (withRefund === true || withRefund === 'true') {
       refundAmount = charge;
       
-      // Check if order already has refund
-      const [existingRefunds] = await connection.query(
-        `SELECT refunded_amount FROM orders WHERE order_id = ? AND user_id = ?`,
-        [cancelOrderId, userId]
+      // ✅ Update same order with refunded_amount
+      await connection.query(
+        `UPDATE orders 
+         SET refunded_amount = ?,
+             status = 'fully_refunded',
+             updated_at = NOW()
+         WHERE order_id = ? AND user_id = ?`,
+        [charge, orderId, userId]
       );
       
-      if (existingRefunds.length > 0 && parseFloat(existingRefunds[0].refunded_amount || 0) > 0) {
-        // Already refunded, skip
-        refundProcessed = false;
-      } else {
-        // Update order with refunded_amount
-        await connection.query(
-          `UPDATE orders 
-           SET refunded_amount = ?,
-               status = 'fully_refunded',
-               updated_at = NOW()
-           WHERE order_id = ? AND user_id = ?`,
-          [charge, cancelOrderId, userId]
-        );
-        
-        refundProcessed = true;
-      }
+      refundProcessed = true;
     }
     
-    // ─── STEP 6: Commit transaction ────────────────────────────────────
+    // ─── STEP 5: Commit transaction ────────────────────────────────────
     await connection.commit();
     
-    console.log(`🗑️ Queue order ${orderId} canceled and moved to orders`);
-    if (refundProcessed) {
-      console.log(`💰 Refund of LKR ${refundAmount.toFixed(2)} processed for user ${userId}`);
-    }
+    console.log(`🗑️ Queue order ${orderId} canceled${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)}` : ''}`);
     
     res.json({
       success: true,
       message: `Queue order ${orderId} canceled successfully${refundProcessed ? ` and refunded LKR ${refundAmount.toFixed(2)}` : ''}`,
       data: {
-        order_id: cancelOrderId,
-        original_queue_id: orderId,
+        order_id: orderId,
         user_id: userId,
         charge: charge,
         refunded: refundProcessed,
         refund_amount: refundProcessed ? refundAmount : 0,
-        status: 'Canceled'
+        status: refundProcessed ? 'fully_refunded' : 'Canceled'
       }
     });
     
