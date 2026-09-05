@@ -287,23 +287,6 @@ exports.runQueueManually = async (req, res) => {
             // Stop processing - no more balance
             break;
             
-          } else {
-            // Other error - mark as failed in queue
-            await db.query(
-              `UPDATE order_queue 
-               SET status = 'failed',
-                   error_message = ?,
-                   updated_at = NOW() 
-               WHERE order_id = ?`,
-              [data.error, orderId]
-            );
-            
-            failedCount++;
-            results.push({
-              order_id: orderId,
-              status: 'failed',
-              reason: data.error
-            });
           }
           
         } else {
