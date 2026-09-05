@@ -165,8 +165,8 @@ exports.runQueueManually = async (req, res) => {
     
     // ─── STEP 3: Get QUEUE orders ──────────────────────────────────
     const [queueOrders] = await db.query(
-      `SELECT * FROM order_queue 
-       WHERE status = 'pending' 
+      `SELECT * FROM orders 
+       WHERE status = 'queue' 
        ORDER BY created_at ASC 
        LIMIT 20`
     );
