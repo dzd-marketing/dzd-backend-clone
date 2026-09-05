@@ -1,5 +1,51 @@
 const db = require('../config/db');
 
+exports.deleteQueueOrder = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    
+    // Check if order exists in queue
+    const [existing] = await db.query(
+      'SELECT id, status FROM order_queue WHERE order_id = ?',
+      [orderId]
+    );
+    
+    if (existing.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Queue order not found' 
+      });
+    }
+    
+    // Delete from queue
+    const [result] = await db.query(
+      `DELETE FROM order_queue WHERE order_id = ?`,
+      [orderId]
+    );
+    
+    if (result.affectedRows > 0) {
+      console.log(`🗑️ Queue order ${orderId} deleted successfully`);
+      return res.json({
+        success: true,
+        message: `Queue order ${orderId} deleted successfully`,
+        deleted: true
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete queue order'
+    });
+    
+  } catch (error) {
+    console.error('Error deleting queue order:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to delete queue order' 
+    });
+  }
+};
+
 exports.runQueueManually = async (req, res) => {
   try {
     console.log('🔄 [Manual] Processing queue orders...', new Date().toISOString());
