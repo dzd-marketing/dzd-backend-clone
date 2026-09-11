@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { sendLiveNotification, maskUserName } = require('./notificationHelper');
 const PROVIDER_BALANCE_API = 'https://smmcheep.com/api/v2?key=e785f9e49139b1f3e6a5a1d98a09506c&action=balance';
 const EXCHANGE_API = 'https://v6.exchangerate-api.com/v6/be291495375008a1e603a49a/latest/USD';
 
@@ -548,6 +549,41 @@ exports.createOrder = async (req, res) => {
         ]
       );
 
+      // ─── ✅ SEND LIVE NOTIFICATION (NON-BLOCKING) ────────────────
+      // 🔥 Notification error එකක් ආවත් order එකට බලපාන්නේ නැහැ
+      try {
+        const io = req.app.get('io');
+        
+        let userName = 'Someone';
+        try {
+          const [users] = await db.query(
+            `SELECT full_name, username, email FROM users WHERE uid = ?`,
+            [userId]
+          );
+          
+          if (users.length > 0) {
+            userName = users[0].full_name || users[0].username || users[0].email?.split('@')[0] || 'Someone';
+          }
+        } catch (dbError) {
+          console.error('⚠️ [Notification] Failed to fetch user:', dbError.message);
+        }
+        
+        const maskedName = maskUserName(userName);
+        
+        sendLiveNotification(io, {
+          type: 'order',
+          title: `${maskedName} Purchased ${serviceName}`,
+          userName: maskedName,
+          icon: '⚡',
+          color: '#3b82f6',
+          amount: charge,
+          currency: currency || 'LKR'
+        });
+      } catch (notifError) {
+        // 🔥 Notification error එක නිකන්ම log කරනවා, order එකට බලපාන්නේ නැහැ
+        console.error('⚠️ [Notification] Failed (order still successful):', notifError.message);
+      }
+
       return res.status(201).json({
         success: true,
         message: 'Order placed successfully',
@@ -583,6 +619,40 @@ exports.createOrder = async (req, res) => {
           'queue'
         ]
       );
+
+      // ─── ✅ SEND LIVE NOTIFICATION (NON-BLOCKING) ────────────────
+      // 🔥 Notification error එකක් ආවත් order එකට බලපාන්නේ නැහැ
+      try {
+        const io = req.app.get('io');
+        
+        let userName = 'Someone';
+        try {
+          const [users] = await db.query(
+            `SELECT full_name, username, email FROM users WHERE uid = ?`,
+            [userId]
+          );
+          
+          if (users.length > 0) {
+            userName = users[0].full_name || users[0].username || users[0].email?.split('@')[0] || 'Someone';
+          }
+        } catch (dbError) {
+          console.error('⚠️ [Notification] Failed to fetch user:', dbError.message);
+        }
+        
+        const maskedName = maskUserName(userName);
+        
+        sendLiveNotification(io, {
+          type: 'order',
+          title: `${maskedName} Purchased ${serviceName}`,
+          userName: maskedName,
+          icon: '⚡',
+          color: '#3b82f6',
+          amount: charge,
+          currency: currency || 'LKR'
+        });
+      } catch (notifError) {
+        console.error('⚠️ [Notification] Failed (order still successful):', notifError.message);
+      }
 
       // ❗ Don't expose provider balance error to user
       return res.status(201).json({
