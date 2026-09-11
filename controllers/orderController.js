@@ -574,6 +574,7 @@ exports.createOrder = async (req, res) => {
           type: 'order',
           title: `${maskedName} Purchased ${serviceName}`,
           userName: maskedName,
+          userId: userId,  
           icon: '⚡',
           color: '#3b82f6',
           amount: charge,
