@@ -16,6 +16,7 @@ const adminAuthRoutes = require('./routes/adminAuthRoutes');
 const serviceImportRoutes = require('./routes/serviceImportRoutes');
 const servicesRoutes = require('./routes/servicesRoutes');
 const adminOrderRoutes = require('./routes/adminOrderRoutes');
+const slPackageRoutes = require('./routes/slPackageRoutes');
 
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
@@ -125,6 +126,13 @@ app.use('/api/status', statusRoutes);
 app.use('/api/service-import', serviceImportRoutes);
 app.use('/api/services', servicesRoutes);
 app.use('/api/admin/orders', adminOrderRoutes);
+app.use('/api/sl-packages', slPackageRoutes);   // 🇱🇰 Sri Lankan audience price list (public)
+
+// ─── SL PACKAGES · warm up schema/seed at boot (non-fatal) ─────────────────
+require('./controllers/slPackageController')
+  .ensureSchema()
+  .then(() => console.log('🇱🇰 SL packages table ready'))
+  .catch(err => console.warn('⚠️  SL packages schema warm-up skipped:', err.message));
 
 // ─── HEALTH CHECK ────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
