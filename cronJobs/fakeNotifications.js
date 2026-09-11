@@ -48,7 +48,7 @@ const POPULAR_SERVICES = [
 const DEPOSIT_AMOUNTS = [500, 1000, 12800, 2000, 2500, 3000, 4000, 5000, 7500, 10000];
 
 // ─── CRON: Run every 15 seconds ──────────────────────────────
-cron.schedule('*/15 * * * * *', async () => {
+cron.schedule('*/25 * * * * *', async () => {
   if (!io) return;
   
   try {
