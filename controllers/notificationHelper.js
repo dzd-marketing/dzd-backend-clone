@@ -23,6 +23,7 @@ function sendLiveNotification(io, data) {
     title: data.title || 'New Activity',
     message: data.message || '',
     userName: data.userName || 'Someone',
+    userId: data.userId || null,   
     amount: data.amount || null,
     currency: data.currency || 'LKR',
     icon: data.icon || '⚡',
