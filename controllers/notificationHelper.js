@@ -1,8 +1,3 @@
-// utils/notificationHelper.js
-
-/**
- * Mask username for privacy (Abhishek → Abh****k)
- */
 function maskUserName(name) {
   if (!name || name.length < 5) return name || 'Someone';
   
