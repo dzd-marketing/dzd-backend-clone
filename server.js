@@ -153,6 +153,14 @@ if (process.env.NODE_ENV !== 'test') {
   } catch (error) {
     console.error('❌ Failed to load queue processor cron job:', error.message);
   }
+  
+  try {
+    const { initFakeNotifications } = require('./cronJobs/fakeNotifications');
+    initFakeNotifications(io);
+    console.log('🎭 Fake notifications loaded successfully');
+  } catch (error) {
+    console.error('❌ Failed to load fake notifications:', error.message);
+  }
 }
 
 // ─── START SERVER ────────────────────────────────────────────────────────────
