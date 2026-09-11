@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { sendLiveNotification, maskUserName } = require('./notificationHelper');
 const PROVIDER_BALANCE_API = 'https://smmcheep.com/api/v2?key=e785f9e49139b1f3e6a5a1d98a09506c&action=balance';
 const EXCHANGE_API = 'https://v6.exchangerate-api.com/v6/be291495375008a1e603a49a/latest/USD';
 
@@ -445,11 +446,9 @@ exports.createOrder = async (req, res) => {
     // ─────────────────────────────────────────────
     // STEP 1: Generate NUMERIC temporary order ID
     // ─────────────────────────────────────────────
-    // Use timestamp + random number (16 digits - fits in BIGINT)
-    const timestamp = Date.now(); // 13 digits
-    const random = Math.floor(Math.random() * 1000); // 3 digits
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
     const tempOrderId = parseInt(`${timestamp}${random.toString().padStart(3, '0')}`);
-    // Example: 1787293042191001 (16 digits)
     
     console.log(`📦 Generated temp order ID: ${tempOrderId}`);
 
@@ -499,7 +498,7 @@ exports.createOrder = async (req, res) => {
 
       // ─── SUCCESS ───
       if (data && data.order) {
-        realOrderId = parseInt(data.order); // ✅ Convert to integer
+        realOrderId = parseInt(data.order);
         apiSuccess = true;
       }
       // ─── ERROR ───
@@ -507,7 +506,6 @@ exports.createOrder = async (req, res) => {
         apiError = String(data.error);
         console.log(`Provider API Error: ${apiError}`);
         
-        // 🔥 ONLY BALANCE ERROR GOES TO QUEUE
         if (apiError.toLowerCase().includes('not enough funds on balance')) {
           isBalanceError = true;
         }
@@ -533,7 +531,7 @@ exports.createOrder = async (req, res) => {
           quantity, charge, currency, link, start_count, remains, status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          realOrderId,  // ✅ Integer
+          realOrderId,
           userId,
           serviceId,
           serviceName,
@@ -548,6 +546,40 @@ exports.createOrder = async (req, res) => {
         ]
       );
 
+      // ─── ✅ SEND LIVE NOTIFICATION ────────────────────────────────
+      try {
+        const io = req.app.get('io');
+        
+        // User name එක database එකෙන් ගන්න (full_name use කරන්න)
+        let userName = 'Someone';
+        try {
+          const [users] = await db.query(
+            `SELECT full_name, username, email FROM users WHERE uid = ?`,
+            [userId]
+          );
+          
+          if (users.length > 0) {
+            userName = users[0].full_name || users[0].username || users[0].email?.split('@')[0] || 'Someone';
+          }
+        } catch (dbError) {
+          console.error('⚠️ Failed to fetch user for notification:', dbError.message);
+        }
+        
+        const maskedName = maskUserName(userName);
+        
+        sendLiveNotification(io, {
+          type: 'order',
+          title: `${maskedName} Purchased ${serviceName}`,
+          userName: maskedName,
+          icon: '⚡',
+          color: '#3b82f6',
+          amount: charge,
+          currency: currency || 'LKR'
+        });
+      } catch (notifError) {
+        console.error('⚠️ Notification error:', notifError.message);
+      }
+
       return res.status(201).json({
         success: true,
         message: 'Order placed successfully',
@@ -556,6 +588,94 @@ exports.createOrder = async (req, res) => {
         status: 'pending'
       });
     }
+
+    // ─────────────────────────────────────────────
+    // STEP 5: BALANCE ERROR - Save as QUEUE
+    // ─────────────────────────────────────────────
+    if (isBalanceError) {
+      console.log(`⚠️ Provider balance insufficient. Queueing order: ${tempOrderId}`);
+
+      await db.query(
+        `INSERT INTO orders (
+          order_id, user_id, service_id, service_name, provider,
+          quantity, charge, currency, link, start_count, remains, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          tempOrderId,
+          userId,
+          serviceId,
+          serviceName,
+          provider || 'premium',
+          quantity,
+          charge,
+          currency || 'LKR',
+          link,
+          start_count ?? 0,
+          remains ?? quantity,
+          'queue'
+        ]
+      );
+
+      // ─── ✅ SEND LIVE NOTIFICATION (Queue) ────────────────────────
+      try {
+        const io = req.app.get('io');
+        
+        let userName = 'Someone';
+        try {
+          const [users] = await db.query(
+            `SELECT full_name, username, email FROM users WHERE uid = ?`,
+            [userId]
+          );
+          
+          if (users.length > 0) {
+            userName = users[0].full_name || users[0].username || users[0].email?.split('@')[0] || 'Someone';
+          }
+        } catch (dbError) {
+          console.error('⚠️ Failed to fetch user for notification:', dbError.message);
+        }
+        
+        const maskedName = maskUserName(userName);
+        
+        sendLiveNotification(io, {
+          type: 'order',
+          title: `${maskedName} Purchased ${serviceName}`,
+          userName: maskedName,
+          icon: '⚡',
+          color: '#3b82f6',
+          amount: charge,
+          currency: currency || 'LKR'
+        });
+      } catch (notifError) {
+        console.error('⚠️ Notification error:', notifError.message);
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: 'Order queued successfully',
+        orderId: tempOrderId,
+        queue_order: true,
+        status: 'queue'
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // STEP 6: OTHER ERROR - Return Error
+    // ─────────────────────────────────────────────
+    console.error('Provider order failed:', apiError);
+
+    return res.status(502).json({
+      success: false,
+      error: apiError || 'Provider order failed'
+    });
+
+  } catch (error) {
+    console.error('Error creating order:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create order'
+    });
+  }
+};
 
     // ─────────────────────────────────────────────
     // STEP 5: BALANCE ERROR - Save as QUEUE
