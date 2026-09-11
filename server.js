@@ -148,8 +148,9 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 // ─── START SERVER ────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Server running on port ${PORT} on all interfaces`);
+  console.log(`🔌 Socket.io ready for connections`);
 });
 
 // ─── GRACEFUL SHUTDOWN ──────────────────────────────────────────────────────
